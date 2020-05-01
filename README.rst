@@ -1,5 +1,4 @@
-|Travis Build Status| |Appveyor Build status| |Health| |Coverage Status|
-|PyPI| |Gitter Chat|
+|Travis Build Status| |Appveyor Build status| |Coverage Status| |PyPI| |Gitter Chat|
 
 What is this?
 ~~~~~~~~~~~~~
@@ -15,8 +14,14 @@ What is this?
 Installation
 ~~~~~~~~~~~~
 
-FontTools requires `Python <http://www.python.org/download/>`__ 2.7, 3.4
-or later.
+FontTools 4.x requires `Python <http://www.python.org/download/>`__ 3.6
+or later. FontTools 3.x requires Python 2.7 or later.
+
+**NOTE** From August 2019, until no later than January 1 2020, the support
+for *Python 2.7* will be limited to only critical bug fixes, and no new features
+will be added to the ``py27`` branch. You can read more `here <https://python3statement.org>`__
+and `here <https://github.com/fonttools/fonttools/issues/765>`__ for the
+reasons behind this decision.
 
 The package is listed in the Python Package Index (PyPI), so you can
 install it with `pip <https://pip.pypa.io>`__:
@@ -130,12 +135,10 @@ important, we maintain an ordered list of glyph names in the font.
 Other Tools
 ~~~~~~~~~~~
 
-Commands for inspecting, merging and subsetting fonts are also
-available:
+Commands for merging and subsetting fonts are also available:
 
 .. code:: sh
 
-    pyftinspect
     pyftmerge
     pyftsubset
 
@@ -164,109 +167,145 @@ The ``fontTools`` package currently has no (required) external dependencies
 besides the modules included in the Python Standard Library.
 However, a few extra dependencies are required by some of its modules, which
 are needed to unlock optional features.
+The ``fonttools`` PyPI distribution also supports so-called "extras", i.e. a
+set of keywords that describe a group of additional dependencies, which can be
+used when installing via pip, or when specifying a requirement.
+For example:
 
--  ``Lib/fontTools/ttLib/woff2.py``
+.. code:: sh
 
-   Module to compress/decompress WOFF 2.0 web fonts; it requires:
+    pip install fonttools[ufo,lxml,woff,unicode]
 
-   -  `brotli <https://pypi.python.org/pypi/Brotli>`__: Python bindings of
-      the Brotli compression library.
+This command will install fonttools, as well as the optional dependencies that
+are required to unlock the extra features named "ufo", etc.
 
--  ``Lib/fontTools/ttLib/sfnt.py``
+- ``Lib/fontTools/misc/etree.py``
 
-   To better compress WOFF 1.0 web fonts, the following module can be used
-   instead of the built-in ``zlib`` library:
+  The module exports a ElementTree-like API for reading/writing XML files, and
+  allows to use as the backend either the built-in ``xml.etree`` module or
+  `lxml <https://lxml.de>`__. The latter is preferred whenever present,
+  as it is generally faster and more secure.
 
-   -  `zopfli <https://pypi.python.org/pypi/zopfli>`__: Python bindings of
-      the Zopfli compression library.
+  *Extra:* ``lxml``
 
--  ``Lib/fontTools/unicode.py``
+- ``Lib/fontTools/ufoLib``
 
-   To display the Unicode character names when dumping the ``cmap`` table
-   with ``ttx`` we use the ``unicodedata`` module in the Standard Library.
-   The version included in there varies between different Python versions.
-   To use the latest available data, you can install:
+  Package for reading and writing UFO source files; it requires:
 
-   -  `unicodedata2 <https://pypi.python.org/pypi/unicodedata2>`__:
-      ``unicodedata`` backport for Python 2.7 and 3.5 updated to the latest
-      Unicode version 9.0. Note this is not necessary if you use Python 3.6
-      as the latter already comes with an up-to-date ``unicodedata``.
+  * `fs <https://pypi.org/pypi/fs>`__: (aka ``pyfilesystem2``) filesystem
+    abstraction layer.
 
--  ``Lib/fontTools/varLib/interpolatable.py``
+  * `enum34 <https://pypi.org/pypi/enum34>`__: backport for the built-in ``enum``
+    module (only required on Python < 3.4).
 
-   Module for finding wrong contour/component order between different masters.
-   It requires one of the following packages in order to solve the so-called
-   "minimum weight perfect matching problem in bipartite graphs", or
-   the Assignment problem:
+  *Extra:* ``ufo``
 
-   *  `scipy <https://pypi.python.org/pypi/scipy>`__: the Scientific Library
-      for Python, which internally uses `NumPy <https://pypi.python.org/pypi/numpy>`__
-      arrays and hence is very fast;
-   *  `munkres <https://pypi.python.org/pypi/munkres>`__: a pure-Python
-      module that implements the Hungarian or Kuhn-Munkres algorithm.
+- ``Lib/fontTools/ttLib/woff2.py``
 
--  ``Lib/fontTools/misc/symfont.py``
+  Module to compress/decompress WOFF 2.0 web fonts; it requires:
 
-   Advanced module for symbolic font statistics analysis; it requires:
+  * `brotli <https://pypi.python.org/pypi/Brotli>`__: Python bindings of
+    the Brotli compression library.
 
-   *  `sympy <https://pypi.python.org/pypi/sympy>`__: the Python library for
-      symbolic mathematics.
+  *Extra:* ``woff``
 
--  ``Lib/fontTools/t1Lib.py``
+- ``Lib/fontTools/ttLib/sfnt.py``
 
-   To get the file creator and type of Macintosh PostScript Type 1 fonts
-   on Python 3 you need to install the following module, as the old ``MacOS``
-   module is no longer included in Mac Python:
+  To better compress WOFF 1.0 web fonts, the following module can be used
+  instead of the built-in ``zlib`` library:
 
-   *  `xattr <https://pypi.python.org/pypi/xattr>`__: Python wrapper for
-      extended filesystem attributes (macOS platform only).
+  * `zopfli <https://pypi.python.org/pypi/zopfli>`__: Python bindings of
+    the Zopfli compression library.
 
--  ``Lib/fontTools/pens/cocoaPen.py``
+  *Extra:* ``woff``
 
-   Pen for drawing glyphs with Cocoa ``NSBezierPath``, requires:
+- ``Lib/fontTools/unicode.py``
 
-   *  `PyObjC <https://pypi.python.org/pypi/pyobjc>`__: the bridge between
-      Python and the Objective-C runtime (macOS platform only).
+  To display the Unicode character names when dumping the ``cmap`` table
+  with ``ttx`` we use the ``unicodedata`` module in the Standard Library.
+  The version included in there varies between different Python versions.
+  To use the latest available data, you can install:
 
--  ``Lib/fontTools/pens/qtPen.py``
+  * `unicodedata2 <https://pypi.python.org/pypi/unicodedata2>`__:
+    ``unicodedata`` backport for Python 2.7 and 3.x updated to the latest
+    Unicode version 12.0. Note this is not necessary if you use Python 3.8
+    as the latter already comes with an up-to-date ``unicodedata``.
 
-   Pen for drawing glyphs with Qt's ``QPainterPath``, requires:
+  *Extra:* ``unicode``
 
-   *  `PyQt5 <https://pypi.python.org/pypi/PyQt5>`__: Python bindings for
-      the Qt cross platform UI and application toolkit.
+- ``Lib/fontTools/varLib/interpolatable.py``
 
--  ``Lib/fontTools/pens/reportLabPen.py``
+  Module for finding wrong contour/component order between different masters.
+  It requires one of the following packages in order to solve the so-called
+  "minimum weight perfect matching problem in bipartite graphs", or
+  the Assignment problem:
 
-   Pen to drawing glyphs as PNG images, requires:
+  * `scipy <https://pypi.python.org/pypi/scipy>`__: the Scientific Library
+    for Python, which internally uses `NumPy <https://pypi.python.org/pypi/numpy>`__
+    arrays and hence is very fast;
+  * `munkres <https://pypi.python.org/pypi/munkres>`__: a pure-Python
+    module that implements the Hungarian or Kuhn-Munkres algorithm.
 
-   *  `reportlab <https://pypi.python.org/pypi/reportlab>`__: Python toolkit
-      for generating PDFs and graphics.
+  *Extra:* ``interpolatable``
 
--  ``Lib/fontTools/inspect.py``
+- ``Lib/fontTools/varLib/plot.py``
 
-   A GUI font inspector, requires one of the following packages:
+  Module for visualizing DesignSpaceDocument and resulting VariationModel.
 
-   *  `PyGTK <https://pypi.python.org/pypi/PyGTK>`__: Python bindings for
-      GTK  2.x (only works with Python 2).
-   *  `PyGObject <https://wiki.gnome.org/action/show/Projects/PyGObject>`__ :
-      Python bindings for GTK 3.x and gobject-introspection libraries (also
-      compatible with Python 3).
+  * `matplotlib <https://pypi.org/pypi/matplotlib>`__: 2D plotting library.
+
+  *Extra:* ``plot``
+
+- ``Lib/fontTools/misc/symfont.py``
+
+  Advanced module for symbolic font statistics analysis; it requires:
+
+  * `sympy <https://pypi.python.org/pypi/sympy>`__: the Python library for
+    symbolic mathematics.
+
+  *Extra:* ``symfont``
+
+- ``Lib/fontTools/t1Lib.py``
+
+  To get the file creator and type of Macintosh PostScript Type 1 fonts
+  on Python 3 you need to install the following module, as the old ``MacOS``
+  module is no longer included in Mac Python:
+
+  * `xattr <https://pypi.python.org/pypi/xattr>`__: Python wrapper for
+    extended filesystem attributes (macOS platform only).
+
+  *Extra:* ``type1``
+
+- ``Lib/fontTools/pens/cocoaPen.py``
+
+  Pen for drawing glyphs with Cocoa ``NSBezierPath``, requires:
+
+  * `PyObjC <https://pypi.python.org/pypi/pyobjc>`__: the bridge between
+    Python and the Objective-C runtime (macOS platform only).
+
+- ``Lib/fontTools/pens/qtPen.py``
+
+  Pen for drawing glyphs with Qt's ``QPainterPath``, requires:
+
+  * `PyQt5 <https://pypi.python.org/pypi/PyQt5>`__: Python bindings for
+    the Qt cross platform UI and application toolkit.
+
+- ``Lib/fontTools/pens/reportLabPen.py``
+
+  Pen to drawing glyphs as PNG images, requires:
+
+  * `reportlab <https://pypi.python.org/pypi/reportlab>`__: Python toolkit
+    for generating PDFs and graphics.
 
 Testing
 ~~~~~~~
 
-To run the test suite, you can do:
-
-.. code:: sh
-
-    python setup.py test
-
-If you have `pytest <http://docs.pytest.org/en/latest/>`__, you can run
-the ``pytest`` command directly. The tests will run against the
+To run the test suite, you need to install `pytest <http://docs.pytest.org/en/latest/>`__.
+When you run the ``pytest`` command, the tests will run against the
 installed ``fontTools`` package, or the first one found in the
 ``PYTHONPATH``.
 
-You can also use `tox <https://testrun.org/tox/latest/>`__ to
+You can also use `tox <https://tox.readthedocs.io/en/latest/>`__ to
 automatically run tests on different Python versions in isolated virtual
 environments.
 
@@ -277,15 +316,15 @@ environments.
 
 Note that when you run ``tox`` without arguments, the tests are executed
 for all the environments listed in tox.ini's ``envlist``. In our case,
-this includes Python 2.7 and 3.6, so for this to work the ``python2.7``
-and ``python3.6`` executables must be available in your ``PATH``.
+this includes Python 3.6 and 3.7, so for this to work the ``python3.6``
+and ``python3.7`` executables must be available in your ``PATH``.
 
 You can specify an alternative environment list via the ``-e`` option,
 or the ``TOXENV`` environment variable:
 
 .. code:: sh
 
-    tox -e py27-nocov
+    tox -e py36
     TOXENV="py36-cov,htmlcov" tox
 
 Development Community
@@ -323,15 +362,15 @@ In alphabetical order:
 
 Olivier Berten, Samyak Bhuta, Erik van Blokland, Petr van Blokland,
 Jelle Bosma, Sascha Brawer, Tom Byrer, Frédéric Coiffier, Vincent
-Connare, Dave Crossland, Simon Daniels, Behdad Esfahbod, Behnam
-Esfahbod, Hannes Famira, Sam Fishman, Matt Fontaine, Yannis Haralambous,
-Greg Hitchcock, Jeremie Hornus, Khaled Hosny, John Hudson, Denis Moyogo
-Jacquerye, Jack Jansen, Tom Kacvinsky, Jens Kutilek, Antoine Leca,
-Werner Lemberg, Tal Leming, Peter Lofting, Cosimo Lupo, Masaya Nakamura,
-Dave Opstad, Laurence Penney, Roozbeh Pournader, Garret Rieger, Read
-Roberts, Guido van Rossum, Just van Rossum, Andreas Seidel, Georg
-Seifert, Miguel Sousa, Adam Twardoch, Adrien Tétar, Vitaly Volkov, Paul
-Wise.
+Connare, Dave Crossland, Simon Daniels, Peter Dekkers, Behdad Esfahbod,
+Behnam Esfahbod, Hannes Famira, Sam Fishman, Matt Fontaine, Yannis
+Haralambous, Greg Hitchcock, Jeremie Hornus, Khaled Hosny, John Hudson,
+Denis Moyogo Jacquerye, Jack Jansen, Tom Kacvinsky, Jens Kutilek,
+Antoine Leca, Werner Lemberg, Tal Leming, Peter Lofting, Cosimo Lupo,
+Masaya Nakamura, Dave Opstad, Laurence Penney, Roozbeh Pournader, Garret
+Rieger, Read Roberts, Guido van Rossum, Just van Rossum, Andreas Seidel,
+Georg Seifert, Chris Simpkins, Miguel Sousa, Adam Twardoch, Adrien Tétar, Vitaly Volkov,
+Paul Wise.
 
 Copyrights
 ~~~~~~~~~~
@@ -354,8 +393,6 @@ Have fun!
    :target: https://travis-ci.org/fonttools/fonttools
 .. |Appveyor Build status| image:: https://ci.appveyor.com/api/projects/status/0f7fmee9as744sl7/branch/master?svg=true
    :target: https://ci.appveyor.com/project/fonttools/fonttools/branch/master
-.. |Health| image:: https://landscape.io/github/behdad/fonttools/master/landscape.svg?style=flat
-   :target: https://landscape.io/github/behdad/fonttools/master
 .. |Coverage Status| image:: https://codecov.io/gh/fonttools/fonttools/branch/master/graph/badge.svg
    :target: https://codecov.io/gh/fonttools/fonttools
 .. |PyPI| image:: https://img.shields.io/pypi/v/fonttools.svg

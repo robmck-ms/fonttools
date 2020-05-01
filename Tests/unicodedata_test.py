@@ -1,5 +1,3 @@
-from __future__ import (
-    print_function, division, absolute_import, unicode_literals)
 from fontTools.misc.py23 import *
 
 from fontTools import unicodedata
@@ -163,10 +161,10 @@ def test_script_extension():
     assert unicodedata.script_extension(unichr(0x0378)) == {"Zzzz"}
     assert unicodedata.script_extension(unichr(0x10FFFF)) == {"Zzzz"}
 
-    assert unicodedata.script_extension("\u0660") == {'Arab', 'Thaa'}
+    assert unicodedata.script_extension("\u0660") == {'Arab', 'Thaa', 'Yezi'}
     assert unicodedata.script_extension("\u0964") == {
-        'Beng', 'Deva', 'Dogr', 'Gong', 'Gran', 'Gujr', 'Guru', 'Knda',
-        'Mahj', 'Mlym', 'Orya', 'Sind', 'Sinh', 'Sylo', 'Takr', 'Taml',
+        'Beng', 'Deva', 'Dogr', 'Gong', 'Gonm', 'Gran', 'Gujr', 'Guru', 'Knda',
+        'Mahj', 'Mlym', 'Nand', 'Orya', 'Sind', 'Sinh', 'Sylo', 'Takr', 'Taml',
         'Telu', 'Tirh'}
 
 

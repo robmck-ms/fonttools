@@ -1,9 +1,39 @@
 """Variation fonts interpolation models."""
-from __future__ import print_function, division, absolute_import
-from fontTools.misc.py23 import *
 
-__all__ = ['normalizeValue', 'normalizeLocation', 'supportScalar', 'VariationModel']
+__all__ = ['nonNone', 'allNone', 'allEqual', 'allEqualTo', 'subList',
+	   'normalizeValue', 'normalizeLocation',
+	   'supportScalar',
+	   'VariationModel']
 
+from .errors import VariationModelError
+
+
+def nonNone(lst):
+	return [l for l in lst if l is not None]
+
+def allNone(lst):
+	return all(l is None for l in lst)
+
+def allEqualTo(ref, lst, mapper=None):
+	if mapper is None:
+		return all(ref == item for item in lst)
+	else:
+		mapped = mapper(ref)
+		return all(mapped == mapper(item) for item in lst)
+
+def allEqual(lst, mapper=None):
+	if not lst:
+		return True
+	it = iter(lst)
+	try:
+		first = next(it)
+	except StopIteration:
+		return True
+	return allEqualTo(first, it, mapper=mapper)
+
+def subList(truth, lst):
+	assert len(truth) == len(lst)
+	return [l for l,t in zip(lst,truth) if t]
 
 def normalizeValue(v, triple):
 	"""Normalizes value based on a min/default/max triple.
@@ -15,7 +45,11 @@ def normalizeValue(v, triple):
 	0.5
 	"""
 	lower, default, upper = triple
-	assert lower <= default <= upper, "invalid axis values: %3.3f, %3.3f %3.3f"%(lower, default, upper)
+	if not (lower <= default <= upper):
+		raise ValueError(
+			f"Invalid axis values, must be minimum, default, maximum: "
+			f"{lower:3.3f}, {default:3.3f}, {upper:3.3f}"
+		)
 	v = max(min(v, upper), lower)
 	if v == default:
 		v = 0.
@@ -109,7 +143,7 @@ def supportScalar(location, support, ot=True):
 			continue
 		if v <= lower or upper <= v:
 			scalar = 0.
-			break;
+			break
 		if v < peak:
 			scalar *= (v - lower) / (peak - lower)
 		else: # v > peak
@@ -162,20 +196,38 @@ class VariationModel(object):
 	  7: 0.6666666666666667}]
 	"""
 
-	def __init__(self, locations, axisOrder=[]):
-		locations = [{k:v for k,v in loc.items() if v != 0.} for loc in locations]
-		keyFunc = self.getMasterLocationsSortKeyFunc(locations, axisOrder=axisOrder)
-		axisPoints = keyFunc.axisPoints
-		self.locations = sorted(locations, key=keyFunc)
-		# TODO Assert that locations are unique.
-		self.mapping = [self.locations.index(l) for l in locations] # Mapping from user's master order to our master order
-		self.reverseMapping = [locations.index(l) for l in self.locations] # Reverse of above
+	def __init__(self, locations, axisOrder=None):
+		if len(set(tuple(sorted(l.items())) for l in locations)) != len(locations):
+			raise VariationModelError("Locations must be unique.")
 
-		self._computeMasterSupports(axisPoints, axisOrder)
+		self.origLocations = locations
+		self.axisOrder = axisOrder if axisOrder is not None else []
+
+		locations = [{k:v for k,v in loc.items() if v != 0.} for loc in locations]
+		keyFunc = self.getMasterLocationsSortKeyFunc(locations, axisOrder=self.axisOrder)
+		self.locations = sorted(locations, key=keyFunc)
+
+		# Mapping from user's master order to our master order
+		self.mapping = [self.locations.index(l) for l in locations]
+		self.reverseMapping = [locations.index(l) for l in self.locations]
+
+		self._computeMasterSupports(keyFunc.axisPoints)
+		self._subModels = {}
+
+	def getSubModel(self, items):
+		if None not in items:
+			return self, items
+		key = tuple(v is not None for v in items)
+		subModel = self._subModels.get(key)
+		if subModel is None:
+			subModel = VariationModel(subList(key, self.origLocations), self.axisOrder)
+			self._subModels[key] = subModel
+		return subModel, subList(key, items)
 
 	@staticmethod
 	def getMasterLocationsSortKeyFunc(locations, axisOrder=[]):
-		assert {} in locations, "Base master not found."
+		if {} not in locations:
+			raise VariationModelError("Base master not found.")
 		axisPoints = {}
 		for loc in locations:
 			if len(loc) != 1:
@@ -194,7 +246,11 @@ class VariationModel(object):
 				return -1 if v < 0 else +1 if v > 0 else 0
 			def key(loc):
 				rank = len(loc)
-				onPointAxes = [axis for axis,value in loc.items() if value in axisPoints[axis]]
+				onPointAxes = [
+					axis for axis, value in loc.items()
+					if axis in axisPoints
+					and value in axisPoints[axis]
+				]
 				orderedAxes = [axis for axis in axisOrder if axis in loc]
 				orderedAxes.extend([axis for axis in sorted(loc.keys()) if axis not in axisOrder])
 				return (
@@ -211,36 +267,37 @@ class VariationModel(object):
 		ret.axisPoints = axisPoints
 		return ret
 
-	@staticmethod
-	def lowerBound(value, lst):
-		if any(v < value for v in lst):
-			return max(v for v in lst if v < value)
-		else:
-			return value
-	@staticmethod
-	def upperBound(value, lst):
-		if any(v > value for v in lst):
-			return min(v for v in lst if v > value)
-		else:
-			return value
+	def reorderMasters(self, master_list, mapping):
+		# For changing the master data order without
+		# recomputing supports and deltaWeights.
+		new_list = [master_list[idx] for idx in mapping]
+		self.origLocations = [self.origLocations[idx] for idx in mapping]
+		locations = [{k:v for k,v in loc.items() if v != 0.}
+			     for loc in self.origLocations]
+		self.mapping = [self.locations.index(l) for l in locations]
+		self.reverseMapping = [locations.index(l) for l in self.locations]
+		self._subModels = {}
+		return new_list
 
-	def _computeMasterSupports(self, axisPoints, axisOrder):
+	def _computeMasterSupports(self, axisPoints):
 		supports = []
 		deltaWeights = []
 		locations = self.locations
+		# Compute min/max across each axis, use it as total range.
+		# TODO Take this as input from outside?
+		minV = {}
+		maxV = {}
+		for l in locations:
+			for k,v in l.items():
+				minV[k] = min(v, minV.get(k, v))
+				maxV[k] = max(v, maxV.get(k, v))
 		for i,loc in enumerate(locations):
 			box = {}
-
-			# Account for axisPoints first
-			# TODO Use axis min/max instead? Isn't that always -1/+1?
-			for axis,values in axisPoints.items():
-				if not axis in loc:
-					continue
-				locV = loc[axis]
+			for axis,locV in loc.items():
 				if locV > 0:
-					box[axis] = (0, locV, max({locV}|values))
+					box[axis] = (0, locV, maxV[axis])
 				else:
-					box[axis] = (min({locV}|values), locV, 0)
+					box[axis] = (minV[axis], locV, 0)
 
 			locAxes = set(loc.keys())
 			# Walk over previous masters now
@@ -258,12 +315,15 @@ class VariationModel(object):
 					continue
 
 				# Split the box for new master; split in whatever direction
-				# that has largest range ratio.  See commit for details.
-				orderedAxes = [axis for axis in axisOrder if axis in m.keys()]
-				orderedAxes.extend([axis for axis in sorted(m.keys()) if axis not in axisOrder])
-				bestAxis = None
+				# that has largest range ratio.
+				#
+				# For symmetry, we actually cut across multiple axes
+				# if they have the largest, equal, ratio.
+				# https://github.com/fonttools/fonttools/commit/7ee81c8821671157968b097f3e55309a1faa511e#commitcomment-31054804
+
+				bestAxes = {}
 				bestRatio = -1
-				for axis in orderedAxes:
+				for axis in m.keys():
 					val = m[axis]
 					assert axis in box
 					lower,locV,upper = box[axis]
@@ -278,14 +338,13 @@ class VariationModel(object):
 						# Can't split box in this direction.
 						continue
 					if ratio > bestRatio:
+						bestAxes = {}
 						bestRatio = ratio
-						bestAxis = axis
-						bestLower = newLower
-						bestUpper = newUpper
-						bestLocV = locV
+					if ratio == bestRatio:
+						bestAxes[axis] = (newLower, locV, newUpper)
 
-				if bestAxis:
-					box[bestAxis] = (bestLower,bestLocV,bestUpper)
+				for axis,triple in bestAxes.items ():
+					box[axis] = triple
 			supports.append(box)
 
 			deltaWeight = {}
@@ -310,6 +369,10 @@ class VariationModel(object):
 			out.append(delta)
 		return out
 
+	def getDeltasAndSupports(self, items):
+		model, items = self.getSubModel(items)
+		return model.getDeltas(items), model.supports
+
 	def getScalars(self, loc):
 		return [supportScalar(loc, support) for support in self.supports]
 
@@ -317,7 +380,7 @@ class VariationModel(object):
 	def interpolateFromDeltasAndScalars(deltas, scalars):
 		v = None
 		assert len(deltas) == len(scalars)
-		for i,(delta,scalar) in enumerate(zip(deltas, scalars)):
+		for delta, scalar in zip(deltas, scalars):
 			if not scalar: continue
 			contribution = delta * scalar
 			if v is None:
@@ -384,6 +447,7 @@ def main(args):
 		pprint(locs)
 		doc.normalize()
 		print("Normalized locations:")
+		locs = [s.location for s in doc.sources]
 		pprint(locs)
 	else:
 		axes = [chr(c) for c in range(ord('A'), ord('Z')+1)]

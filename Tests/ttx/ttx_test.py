@@ -1,4 +1,3 @@
-from __future__ import print_function, division, absolute_import
 from fontTools.misc.py23 import *
 from fontTools.misc.testTools import parseXML
 from fontTools.misc.timeTools import timestampSinceEpoch
@@ -476,6 +475,11 @@ def test_options_recalc_timestamp():
     assert tto.recalcTimestamp is True
 
 
+def test_options_recalc_timestamp():
+    tto = ttx.Options([("--no-recalc-timestamp", "")], 1)
+    assert tto.recalcTimestamp is False
+
+
 def test_options_flavor():
     tto = ttx.Options([("--flavor", "woff")], 1)
     assert tto.flavor == "woff"
@@ -789,6 +793,14 @@ def test_ttcompile_timestamp_calcs(inpath, outpath1, outpath2, tmpdir):
     ttf = TTFont(str(outttf2))
     assert ttf["head"].modified > epochtime
 
+    # --no-recalc-timestamp will keep original timestamp
+    options.recalcTimestamp = False
+    ttx.ttCompile(inttx, str(outttf2), options)
+    assert outttf2.check(file=True)
+    inttf = TTFont()
+    inttf.importXML(inttx)
+    assert inttf["head"].modified == TTFont(str(outttf2))["head"].modified
+
 
 # -------------------------
 # ttx.ttList function tests
@@ -940,7 +952,7 @@ def test_main_getopterror_missing_directory():
             ttx.main(args)
 
 
-def test_main_keyboard_interrupt(tmpdir, monkeypatch, capsys):
+def test_main_keyboard_interrupt(tmpdir, monkeypatch, caplog):
     with pytest.raises(SystemExit):
         inpath = os.path.join("Tests", "ttx", "data", "TestTTF.ttx")
         outpath = tmpdir.join("TestTTF.ttf")
@@ -950,8 +962,7 @@ def test_main_keyboard_interrupt(tmpdir, monkeypatch, capsys):
         )
         ttx.main(args)
 
-    out, err = capsys.readouterr()
-    assert "(Cancelled.)" in err
+    assert "(Cancelled.)" in caplog.text
 
 
 @pytest.mark.skipif(
@@ -969,7 +980,7 @@ def test_main_system_exit(tmpdir, monkeypatch):
         ttx.main(args)
 
 
-def test_main_ttlib_error(tmpdir, monkeypatch, capsys):
+def test_main_ttlib_error(tmpdir, monkeypatch, caplog):
     with pytest.raises(SystemExit):
         inpath = os.path.join("Tests", "ttx", "data", "TestTTF.ttx")
         outpath = tmpdir.join("TestTTF.ttf")
@@ -981,15 +992,14 @@ def test_main_ttlib_error(tmpdir, monkeypatch, capsys):
         )
         ttx.main(args)
 
-    out, err = capsys.readouterr()
-    assert "Test error" in err
+    assert "Test error" in caplog.text
 
 
 @pytest.mark.skipif(
     sys.platform == "win32",
     reason="waitForKeyPress function causes test to hang on Windows platform",
 )
-def test_main_base_exception(tmpdir, monkeypatch, capsys):
+def test_main_base_exception(tmpdir, monkeypatch, caplog):
     with pytest.raises(SystemExit):
         inpath = os.path.join("Tests", "ttx", "data", "TestTTF.ttx")
         outpath = tmpdir.join("TestTTF.ttf")
@@ -1001,8 +1011,7 @@ def test_main_base_exception(tmpdir, monkeypatch, capsys):
         )
         ttx.main(args)
 
-    out, err = capsys.readouterr()
-    assert "Unhandled exception has occurred" in err
+    assert "Unhandled exception has occurred" in caplog.text
 
 
 # ---------------------------

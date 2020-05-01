@@ -1,7 +1,7 @@
-from __future__ import print_function, division, absolute_import
 from fontTools.misc.py23 import *
 from fontTools.ttLib import TTFont
-from fontTools.feaLib.builder import addOpenTypeFeatures
+from fontTools.feaLib.builder import addOpenTypeFeatures, Builder
+from fontTools.feaLib.error import FeatureLibError
 from fontTools import configLogger
 from fontTools.misc.cliTools import makeOutputFileName
 import sys
@@ -23,8 +23,14 @@ def main(args=None):
         "-o", "--output", dest="output_font", metavar="OUTPUT_FONT",
         help="Path to the output font.")
     parser.add_argument(
+        "-t", "--tables", metavar="TABLE_TAG", choices=Builder.supportedTables,
+        nargs='+', help="Specify the table(s) to be built.")
+    parser.add_argument(
         "-v", "--verbose", help="increase the logger verbosity. Multiple -v "
         "options are allowed.", action="count", default=0)
+    parser.add_argument(
+        "--traceback", help="show traceback for exceptions.",
+        action="store_true")
     options = parser.parse_args(args)
 
     levels = ["WARNING", "INFO", "DEBUG"]
@@ -34,7 +40,12 @@ def main(args=None):
     log.info("Compiling features to '%s'" % (output_font))
 
     font = TTFont(options.input_font)
-    addOpenTypeFeatures(font, options.input_fea)
+    try:
+        addOpenTypeFeatures(font, options.input_fea, tables=options.tables)
+    except FeatureLibError as e:
+        if options.traceback:
+            raise
+        log.error(e)
     font.save(output_font)
 
 

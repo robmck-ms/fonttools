@@ -1,9 +1,8 @@
-from __future__ import print_function, division, absolute_import
 from fontTools.misc.py23 import *
 from fontTools.misc import eexec
 from .psOperators import *
 import re
-import collections
+from collections.abc import Callable
 from string import whitespace
 import logging
 
@@ -169,7 +168,7 @@ class PSInterpreter(PSOperators):
 	def suckoperators(self, systemdict, klass):
 		for name in dir(klass):
 			attr = getattr(self, name)
-			if isinstance(attr, collections.Callable) and name[:3] == 'ps_':
+			if isinstance(attr, Callable) and name[:3] == 'ps_':
 				name = name[3:]
 				systemdict[name] = ps_operator(name, attr)
 		for baseclass in klass.__bases__:

@@ -1,6 +1,5 @@
 """xmlWriter.py -- Simple XML authoring class"""
 
-from __future__ import print_function, division, absolute_import
 from fontTools.misc.py23 import *
 import sys
 import os
@@ -30,7 +29,7 @@ class XMLWriter(object):
 		# Figure out if writer expects bytes or unicodes
 		try:
 			# The bytes check should be first.  See:
-			# https://github.com/behdad/fonttools/pull/233
+			# https://github.com/fonttools/fonttools/pull/233
 			self.file.write(b'')
 			self.totype = tobytes
 		except TypeError:

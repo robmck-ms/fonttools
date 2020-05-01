@@ -1,17 +1,12 @@
 # -*- coding: utf-8 -*-
 
-from __future__ import print_function, division, absolute_import
 from fontTools.misc.py23 import *
 from fontTools.misc.loggingTools import LogMixin
 import collections
 import os
 import posixpath
-import plistlib
-
-try:
-    import xml.etree.cElementTree as ET
-except ImportError:
-    import xml.etree.ElementTree as ET
+from fontTools.misc import etree as ET
+from fontTools.misc import plistlib
 
 """
     designSpaceDocument
@@ -29,30 +24,6 @@ __all__ = [
 # so we have to do it ourselves for 'xml:lang'
 XML_NS = "{http://www.w3.org/XML/1998/namespace}"
 XML_LANG = XML_NS + "lang"
-
-
-def to_plist(value):
-    try:
-        # Python 2
-        string = plistlib.writePlistToString(value)
-    except AttributeError:
-        # Python 3
-        string = plistlib.dumps(value).decode()
-    return ET.fromstring(string)[0]
-
-
-def from_plist(element):
-    if element is None:
-        return {}
-    plist = ET.Element('plist')
-    plist.append(element)
-    string = ET.tostring(plist)
-    try:
-        # Python 2
-        return plistlib.readPlistFromString(string)
-    except AttributeError:
-        # Python 3
-        return plistlib.loads(string, fmt=plistlib.FMT_XML)
 
 
 def posix(path):
@@ -86,23 +57,6 @@ class DesignSpaceDocumentError(Exception):
     def __str__(self):
         return str(self.msg) + (
             ": %r" % self.obj if self.obj is not None else "")
-
-
-def _indent(elem, whitespace="    ", level=0):
-    # taken from http://effbot.org/zone/element-lib.htm#prettyprint
-    i = "\n" + level * whitespace
-    if len(elem):
-        if not elem.text or not elem.text.strip():
-            elem.text = i + whitespace
-        if not elem.tail or not elem.tail.strip():
-            elem.tail = i
-        for elem in elem:
-            _indent(elem, whitespace, level+1)
-        if not elem.tail or not elem.tail.strip():
-            elem.tail = i
-    else:
-        if level and (not elem.tail or not elem.tail.strip()):
-            elem.tail = i
 
 
 class AsDictMixin(object):
@@ -146,14 +100,32 @@ class SourceDescriptor(SimpleDescriptor):
               'mutedGlyphNames',
               'familyName', 'styleName']
 
-    def __init__(self):
-        self.filename = None
+    def __init__(
+        self,
+        *,
+        filename=None,
+        path=None,
+        font=None,
+        name=None,
+        location=None,
+        layerName=None,
+        familyName=None,
+        styleName=None,
+        copyLib=False,
+        copyInfo=False,
+        copyGroups=False,
+        copyFeatures=False,
+        muteKerning=False,
+        muteInfo=False,
+        mutedGlyphNames=None,
+    ):
+        self.filename = filename
         """The original path as found in the document."""
 
-        self.path = None
+        self.path = path
         """The absolute path, calculated from filename."""
 
-        self.font = None
+        self.font = font
         """Any Python object. Optional. Points to a representation of this
         source font that is loaded in memory, as a Python object (e.g. a
         ``defcon.Font`` or a ``fontTools.ttFont.TTFont``).
@@ -165,18 +137,19 @@ class SourceDescriptor(SimpleDescriptor):
         this field to the disk and make ```filename`` point to that.
         """
 
-        self.name = None
-        self.location = None
-        self.layerName = None
-        self.copyLib = False
-        self.copyInfo = False
-        self.copyGroups = False
-        self.copyFeatures = False
-        self.muteKerning = False
-        self.muteInfo = False
-        self.mutedGlyphNames = []
-        self.familyName = None
-        self.styleName = None
+        self.name = name
+        self.location = location
+        self.layerName = layerName
+        self.familyName = familyName
+        self.styleName = styleName
+
+        self.copyLib = copyLib
+        self.copyInfo = copyInfo
+        self.copyGroups = copyGroups
+        self.copyFeatures = copyFeatures
+        self.muteKerning = muteKerning
+        self.muteInfo = muteInfo
+        self.mutedGlyphNames = mutedGlyphNames or []
 
     path = posixpath_property("_path")
     filename = posixpath_property("_filename")
@@ -198,10 +171,12 @@ class RuleDescriptor(SimpleDescriptor):
     """
     _attrs = ['name', 'conditionSets', 'subs']   # what do we need here
 
-    def __init__(self):
-        self.name = None
-        self.conditionSets = []  # list of list of dict(name='aaaa', minimum=0, maximum=1000)
-        self.subs = []  # list of substitutions stored as tuples of glyphnames ("a", "a.alt")
+    def __init__(self, *, name=None, conditionSets=None, subs=None):
+        self.name = name
+        # list of lists of dict(name='aaaa', minimum=0, maximum=1000)
+        self.conditionSets = conditionSets or []
+        # list of substitutions stored as tuples of glyphnames ("a", "a.alt")
+        self.subs = subs or []
 
 
 def evaluateRule(rule, location):
@@ -228,7 +203,7 @@ def evaluateConditions(conditions, location):
 
 
 def processRules(rules, location, glyphNames):
-    """ Apply these rules at this location to these glyphnames.minimum
+    """ Apply these rules at this location to these glyphnames
         - rule order matters
     """
     newNames = []
@@ -265,51 +240,75 @@ class InstanceDescriptor(SimpleDescriptor):
               'info',
               'lib']
 
-    def __init__(self):
-        self.filename = None    # the original path as found in the document
-        self.path = None        # the absolute path, calculated from filename
-        self.name = None
-        self.location = None
-        self.familyName = None
-        self.styleName = None
-        self.postScriptFontName = None
-        self.styleMapFamilyName = None
-        self.styleMapStyleName = None
-        self.localisedStyleName = {}
-        self.localisedFamilyName = {}
-        self.localisedStyleMapStyleName = {}
-        self.localisedStyleMapFamilyName = {}
-        self.glyphs = {}
-        self.mutedGlyphNames = []
-        self.kerning = True
-        self.info = True
+    def __init__(
+        self,
+        *,
+        filename=None,
+        path=None,
+        font=None,
+        name=None,
+        location=None,
+        familyName=None,
+        styleName=None,
+        postScriptFontName=None,
+        styleMapFamilyName=None,
+        styleMapStyleName=None,
+        localisedFamilyName=None,
+        localisedStyleName=None,
+        localisedStyleMapFamilyName=None,
+        localisedStyleMapStyleName=None,
+        glyphs=None,
+        kerning=True,
+        info=True,
+        lib=None,
+    ):
+        # the original path as found in the document
+        self.filename = filename
+        # the absolute path, calculated from filename
+        self.path = path
+        # Same as in SourceDescriptor.
+        self.font = font
+        self.name = name
+        self.location = location
+        self.familyName = familyName
+        self.styleName = styleName
+        self.postScriptFontName = postScriptFontName
+        self.styleMapFamilyName = styleMapFamilyName
+        self.styleMapStyleName = styleMapStyleName
+        self.localisedFamilyName = localisedFamilyName or {}
+        self.localisedStyleName = localisedStyleName or {}
+        self.localisedStyleMapFamilyName = localisedStyleMapFamilyName or {}
+        self.localisedStyleMapStyleName = localisedStyleMapStyleName or {}
+        self.glyphs = glyphs or {}
+        self.kerning = kerning
+        self.info = info
 
-        self.lib = {}
+        self.lib = lib or {}
         """Custom data associated with this instance."""
 
     path = posixpath_property("_path")
     filename = posixpath_property("_filename")
 
     def setStyleName(self, styleName, languageCode="en"):
-        self.localisedStyleName[languageCode] = styleName
+        self.localisedStyleName[languageCode] = tounicode(styleName)
 
     def getStyleName(self, languageCode="en"):
         return self.localisedStyleName.get(languageCode)
 
     def setFamilyName(self, familyName, languageCode="en"):
-        self.localisedFamilyName[languageCode] = familyName
+        self.localisedFamilyName[languageCode] = tounicode(familyName)
 
     def getFamilyName(self, languageCode="en"):
         return self.localisedFamilyName.get(languageCode)
 
     def setStyleMapStyleName(self, styleMapStyleName, languageCode="en"):
-        self.localisedStyleMapStyleName[languageCode] = styleMapStyleName
+        self.localisedStyleMapStyleName[languageCode] = tounicode(styleMapStyleName)
 
     def getStyleMapStyleName(self, languageCode="en"):
         return self.localisedStyleMapStyleName.get(languageCode)
 
     def setStyleMapFamilyName(self, styleMapFamilyName, languageCode="en"):
-        self.localisedStyleMapFamilyName[languageCode] = styleMapFamilyName
+        self.localisedStyleMapFamilyName[languageCode] = tounicode(styleMapFamilyName)
 
     def getStyleMapFamilyName(self, languageCode="en"):
         return self.localisedStyleMapFamilyName.get(languageCode)
@@ -340,15 +339,29 @@ class AxisDescriptor(SimpleDescriptor):
     flavor = "axis"
     _attrs = ['tag', 'name', 'maximum', 'minimum', 'default', 'map']
 
-    def __init__(self):
-        self.tag = None       # opentype tag for this axis
-        self.name = None      # name of the axis used in locations
-        self.labelNames = {}  # names for UI purposes, if this is not a standard axis,
-        self.minimum = None
-        self.maximum = None
-        self.default = None
-        self.hidden = False
-        self.map = []
+    def __init__(
+        self,
+        *,
+        tag=None,
+        name=None,
+        labelNames=None,
+        minimum=None,
+        default=None,
+        maximum=None,
+        hidden=False,
+        map=None,
+    ):
+        # opentype tag for this axis
+        self.tag = tag
+        # name of the axis used in locations
+        self.name = name
+        # names for UI purposes, if this is not a standard axis,
+        self.labelNames = labelNames or {}
+        self.minimum = minimum
+        self.maximum = maximum
+        self.default = default
+        self.hidden = hidden
+        self.map = map or []
 
     def serialize(self):
         # output to a dict, used in testing
@@ -404,20 +417,24 @@ class BaseDocWriter(object):
     def __init__(self, documentPath, documentObject):
         self.path = documentPath
         self.documentObject = documentObject
-        self.documentVersion = "4.0"
+        self.documentVersion = "4.1"
         self.root = ET.Element("designspace")
         self.root.attrib['format'] = self.documentVersion
         self._axes = []     # for use by the writer only
         self._rules = []    # for use by the writer only
 
-    def write(self, pretty=True, encoding="utf-8", xml_declaration=True):
+    def write(self, pretty=True, encoding="UTF-8", xml_declaration=True):
         if self.documentObject.axes:
             self.root.append(ET.Element("axes"))
         for axisObject in self.documentObject.axes:
             self._addAxis(axisObject)
 
         if self.documentObject.rules:
-            self.root.append(ET.Element("rules"))
+            if getattr(self.documentObject, "rulesProcessingLast", False):
+                attributes = {"processing": "last"}
+            else:
+                attributes = {}
+            self.root.append(ET.Element("rules", attributes))
         for ruleObject in self.documentObject.rules:
             self._addRule(ruleObject)
 
@@ -434,14 +451,13 @@ class BaseDocWriter(object):
         if self.documentObject.lib:
             self._addLib(self.documentObject.lib)
 
-        if pretty:
-            _indent(self.root, whitespace=self._whiteSpace)
         tree = ET.ElementTree(self.root)
         tree.write(
             self.path,
             encoding=encoding,
             method='xml',
             xml_declaration=xml_declaration,
+            pretty_print=pretty,
         )
 
     def _makeLocationElement(self, locationObject, name=None):
@@ -511,7 +527,7 @@ class BaseDocWriter(object):
             axisElement.attrib['hidden'] = "1"
         for languageCode, labelName in sorted(axisObject.labelNames.items()):
             languageElement = ET.Element('labelname')
-            languageElement.attrib[u'xml:lang'] = languageCode
+            languageElement.attrib[XML_LANG] = languageCode
             languageElement.text = labelName
             axisElement.append(languageElement)
         if axisObject.map:
@@ -538,7 +554,7 @@ class BaseDocWriter(object):
                 if code == "en":
                     continue  # already stored in the element attribute
                 localisedStyleNameElement = ET.Element('stylename')
-                localisedStyleNameElement.attrib["xml:lang"] = code
+                localisedStyleNameElement.attrib[XML_LANG] = code
                 localisedStyleNameElement.text = instanceObject.getStyleName(code)
                 instanceElement.append(localisedStyleNameElement)
         if instanceObject.localisedFamilyName:
@@ -548,7 +564,7 @@ class BaseDocWriter(object):
                 if code == "en":
                     continue  # already stored in the element attribute
                 localisedFamilyNameElement = ET.Element('familyname')
-                localisedFamilyNameElement.attrib["xml:lang"] = code
+                localisedFamilyNameElement.attrib[XML_LANG] = code
                 localisedFamilyNameElement.text = instanceObject.getFamilyName(code)
                 instanceElement.append(localisedFamilyNameElement)
         if instanceObject.localisedStyleMapStyleName:
@@ -558,7 +574,7 @@ class BaseDocWriter(object):
                 if code == "en":
                     continue
                 localisedStyleMapStyleNameElement = ET.Element('stylemapstylename')
-                localisedStyleMapStyleNameElement.attrib["xml:lang"] = code
+                localisedStyleMapStyleNameElement.attrib[XML_LANG] = code
                 localisedStyleMapStyleNameElement.text = instanceObject.getStyleMapStyleName(code)
                 instanceElement.append(localisedStyleMapStyleNameElement)
         if instanceObject.localisedStyleMapFamilyName:
@@ -568,7 +584,7 @@ class BaseDocWriter(object):
                 if code == "en":
                     continue
                 localisedStyleMapFamilyNameElement = ET.Element('stylemapfamilyname')
-                localisedStyleMapFamilyNameElement.attrib["xml:lang"] = code
+                localisedStyleMapFamilyNameElement.attrib[XML_LANG] = code
                 localisedStyleMapFamilyNameElement.text = instanceObject.getStyleMapFamilyName(code)
                 instanceElement.append(localisedStyleMapFamilyNameElement)
 
@@ -599,7 +615,7 @@ class BaseDocWriter(object):
             instanceElement.append(infoElement)
         if instanceObject.lib:
             libElement = ET.Element('lib')
-            libElement.append(to_plist(instanceObject.lib))
+            libElement.append(plistlib.totree(instanceObject.lib, indent_level=4))
             instanceElement.append(libElement)
         self.root.findall('.instances')[0].append(instanceElement)
 
@@ -652,7 +668,7 @@ class BaseDocWriter(object):
 
     def _addLib(self, dict):
         libElement = ET.Element('lib')
-        libElement.append(to_plist(dict))
+        libElement.append(plistlib.totree(dict, indent_level=2))
         self.root.append(libElement)
 
     def _writeGlyphElement(self, instanceElement, instanceObject, glyphName, data):
@@ -719,15 +735,17 @@ class BaseDocReader(LogMixin):
         self.readInstances()
         self.readLib()
 
-    def getSourcePaths(self, makeGlyphs=True, makeKerning=True, makeInfo=True):
-        paths = []
-        for name in self.documentObject.sources.keys():
-            paths.append(self.documentObject.sources[name][0].path)
-        return paths
-
     def readRules(self):
         # we also need to read any conditions that are outside of a condition set.
         rules = []
+        rulesElement = self.root.find(".rules")
+        if rulesElement is not None:
+            processingValue = rulesElement.attrib.get("processing", "first")
+            if processingValue not in {"first", "last"}:
+                raise DesignSpaceDocumentError(
+                    "<rules> processing attribute value is not valid: %r, "
+                    "expected 'first' or 'last'" % processingValue)
+            self.documentObject.rulesProcessingLast = processingValue == "last"
         for ruleElement in self.root.findall(".rules/rule"):
             ruleObject = self.ruleDescriptorClass()
             ruleName = ruleObject.name = ruleElement.attrib.get("name")
@@ -801,15 +819,13 @@ class BaseDocReader(LogMixin):
                 b = float(mapElement.attrib['output'])
                 axisObject.map.append((a, b))
             for labelNameElement in axisElement.findall('labelname'):
-                # Note: elementtree reads the xml:lang attribute name as
+                # Note: elementtree reads the "xml:lang" attribute name as
                 # '{http://www.w3.org/XML/1998/namespace}lang'
                 for key, lang in labelNameElement.items():
                     if key == XML_LANG:
-                        labelName = labelNameElement.text
-                        axisObject.labelNames[lang] = labelName
+                        axisObject.labelNames[lang] = tounicode(labelNameElement.text)
             self.documentObject.axes.append(axisObject)
             self.axisDefaults[axisObject.name] = axisObject.default
-        self.documentObject.defaultLoc = self.axisDefaults
 
     def readSources(self):
         for sourceCount, sourceElement in enumerate(self.root.findall(".sources/source")):
@@ -963,7 +979,7 @@ class BaseDocReader(LogMixin):
 
     def readLibElement(self, libElement, instanceObject):
         """Read the lib element for the given instance."""
-        instanceObject.lib = from_plist(libElement[0])
+        instanceObject.lib = plistlib.fromtree(libElement[0])
 
     def readInfoElement(self, infoElement, instanceObject):
         """ Read the info element."""
@@ -1030,7 +1046,7 @@ class BaseDocReader(LogMixin):
     def readLib(self):
         """Read the lib element for the whole document."""
         for libElement in self.root.findall(".lib"):
-            self.documentObject.lib = from_plist(libElement[0])
+            self.documentObject.lib = plistlib.fromtree(libElement[0])
 
 
 class DesignSpaceDocument(LogMixin, AsDictMixin):
@@ -1051,8 +1067,8 @@ class DesignSpaceDocument(LogMixin, AsDictMixin):
         self.instances = []
         self.axes = []
         self.rules = []
+        self.rulesProcessingLast = False
         self.default = None         # name of the default master
-        self.defaultLoc = None
 
         self.lib = {}
         """Custom data associated with the whole document."""
@@ -1090,7 +1106,7 @@ class DesignSpaceDocument(LogMixin, AsDictMixin):
             xml_declaration = False
         elif encoding is None or encoding == "utf-8":
             f = BytesIO()
-            encoding = "utf-8"
+            encoding = "UTF-8"
             xml_declaration = True
         else:
             raise ValueError("unsupported encoding: '%s'" % encoding)
@@ -1099,6 +1115,8 @@ class DesignSpaceDocument(LogMixin, AsDictMixin):
         return f.getvalue()
 
     def read(self, path):
+        if hasattr(path, "__fspath__"):  # support os.PathLike objects
+            path = path.__fspath__()
         self.path = path
         self.filename = os.path.basename(path)
         reader = self.readerClass(path, self)
@@ -1107,6 +1125,8 @@ class DesignSpaceDocument(LogMixin, AsDictMixin):
             self.findDefault()
 
     def write(self, path):
+        if hasattr(path, "__fspath__"):  # support os.PathLike objects
+            path = path.__fspath__()
         self.path = path
         self.filename = os.path.basename(path)
         self.updatePaths()
@@ -1159,40 +1179,53 @@ class DesignSpaceDocument(LogMixin, AsDictMixin):
 
 
         """
+        assert self.path is not None
         for descriptor in self.sources + self.instances:
-            # check what the relative path really should be?
-            expectedFilename = None
-            if descriptor.path is not None and self.path is not None:
-                expectedFilename = self._posixRelativePath(descriptor.path)
-
-            # 3
-            if descriptor.filename is None and descriptor.path is not None and self.path is not None:
+            if descriptor.path is not None:
+                # case 3 and 4: filename gets updated and relativized
                 descriptor.filename = self._posixRelativePath(descriptor.path)
-                continue
-
-            # 4
-            if descriptor.filename is not None and descriptor.path is not None and self.path is not None:
-                if descriptor.filename is not expectedFilename:
-                    descriptor.filename = expectedFilename
 
     def addSource(self, sourceDescriptor):
         self.sources.append(sourceDescriptor)
 
+    def addSourceDescriptor(self, **kwargs):
+        source = self.writerClass.sourceDescriptorClass(**kwargs)
+        self.addSource(source)
+        return source
+
     def addInstance(self, instanceDescriptor):
         self.instances.append(instanceDescriptor)
+
+    def addInstanceDescriptor(self, **kwargs):
+        instance = self.writerClass.instanceDescriptorClass(**kwargs)
+        self.addInstance(instance)
+        return instance
 
     def addAxis(self, axisDescriptor):
         self.axes.append(axisDescriptor)
 
+    def addAxisDescriptor(self, **kwargs):
+        axis = self.writerClass.axisDescriptorClass(**kwargs)
+        self.addAxis(axis)
+        return axis
+
     def addRule(self, ruleDescriptor):
         self.rules.append(ruleDescriptor)
 
+    def addRuleDescriptor(self, **kwargs):
+        rule = self.writerClass.ruleDescriptorClass(**kwargs)
+        self.addRule(rule)
+        return rule
+
     def newDefaultLocation(self):
+        """Return default location in design space."""
         # Without OrderedDict, output XML would be non-deterministic.
         # https://github.com/LettError/designSpaceDocument/issues/10
         loc = collections.OrderedDict()
         for axisDescriptor in self.axes:
-            loc[axisDescriptor.name] = axisDescriptor.default
+            loc[axisDescriptor.name] = axisDescriptor.map_forward(
+                axisDescriptor.default
+            )
         return loc
 
     def updateFilenameFromPath(self, masters=True, instances=True, force=False):
@@ -1236,43 +1269,40 @@ class DesignSpaceDocument(LogMixin, AsDictMixin):
         return None
 
     def findDefault(self):
-        # new default finder
-        # take the sourcedescriptor with the location at all the defaults
-        # if we can't find it, return None, let someone else figure it out
+        """Set and return SourceDescriptor at the default location or None.
+
+        The default location is the set of all `default` values in user space
+        of all axes.
+        """
         self.default = None
+
+        # Convert the default location from user space to design space before comparing
+        # it against the SourceDescriptor locations (always in design space).
+        default_location_design = self.newDefaultLocation()
+
         for sourceDescriptor in self.sources:
-            if sourceDescriptor.location == self.defaultLoc:
-                # we choose you!
+            if sourceDescriptor.location == default_location_design:
                 self.default = sourceDescriptor
                 return sourceDescriptor
+
         return None
 
     def normalizeLocation(self, location):
-        # adapted from fontTools.varlib.models.normalizeLocation because:
-        #   - this needs to work with axis names, not tags
-        #   - this needs to accomodate anisotropic locations
-        #   - the axes are stored differently here, it's just math
+        from fontTools.varLib.models import normalizeValue
+
         new = {}
         for axis in self.axes:
             if axis.name not in location:
                 # skipping this dimension it seems
                 continue
-            v = location.get(axis.name, axis.default)
-            if type(v) == tuple:
-                v = v[0]
-            if v == axis.default:
-                v = 0.0
-            elif v < axis.default:
-                if axis.default == axis.minimum:
-                    v = 0.0
-                else:
-                    v = (max(v, axis.minimum) - axis.default) / (axis.default - axis.minimum)
-            else:
-                if axis.default == axis.maximum:
-                    v = 0.0
-                else:
-                    v = (min(v, axis.maximum) - axis.default) / (axis.maximum - axis.default)
-            new[axis.name] = v
+            value = location[axis.name]
+            # 'anisotropic' location, take first coord only
+            if isinstance(value, tuple):
+                value = value[0]
+            triple = [
+                axis.map_forward(v) for v in (axis.minimum, axis.default, axis.maximum)
+            ]
+            new[axis.name] = normalizeValue(value, triple)
         return new
 
     def normalize(self):
@@ -1324,3 +1354,50 @@ class DesignSpaceDocument(LogMixin, AsDictMixin):
                     newConditions.append(dict(name=cond['name'], minimum=minimum, maximum=maximum))
                 newConditionSets.append(newConditions)
             rule.conditionSets = newConditionSets
+
+    def loadSourceFonts(self, opener, **kwargs):
+        """Ensure SourceDescriptor.font attributes are loaded, and return list of fonts.
+
+        Takes a callable which initializes a new font object (e.g. TTFont, or
+        defcon.Font, etc.) from the SourceDescriptor.path, and sets the
+        SourceDescriptor.font attribute.
+        If the font attribute is already not None, it is not loaded again.
+        Fonts with the same path are only loaded once and shared among SourceDescriptors.
+
+        For example, to load UFO sources using defcon:
+
+            designspace = DesignSpaceDocument.fromfile("path/to/my.designspace")
+            designspace.loadSourceFonts(defcon.Font)
+
+        Or to load masters as FontTools binary fonts, including extra options:
+
+            designspace.loadSourceFonts(ttLib.TTFont, recalcBBoxes=False)
+
+        Args:
+            opener (Callable): takes one required positional argument, the source.path,
+                and an optional list of keyword arguments, and returns a new font object
+                loaded from the path.
+            **kwargs: extra options passed on to the opener function.
+
+        Returns:
+            List of font objects in the order they appear in the sources list.
+        """
+        # we load fonts with the same source.path only once
+        loaded = {}
+        fonts = []
+        for source in self.sources:
+            if source.font is not None:  # font already loaded
+                fonts.append(source.font)
+                continue
+            if source.path in loaded:
+                source.font = loaded[source.path]
+            else:
+                if source.path is None:
+                    raise DesignSpaceDocumentError(
+                        "Designspace source '%s' has no 'path' attribute"
+                        % (source.name or "<Unknown>")
+                    )
+                source.font = opener(source.path, **kwargs)
+                loaded[source.path] = source.font
+            fonts.append(source.font)
+        return fonts

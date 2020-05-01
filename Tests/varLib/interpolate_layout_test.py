@@ -1,10 +1,9 @@
-from __future__ import print_function, division, absolute_import
 from fontTools.misc.py23 import *
 from fontTools.ttLib import TTFont
 from fontTools.varLib import build
 from fontTools.varLib.interpolate_layout import interpolate_layout
 from fontTools.varLib.interpolate_layout import main as interpolate_layout_main
-from fontTools.designspaceLib import DesignSpaceDocumentError
+from fontTools.designspaceLib import DesignSpaceDocument, DesignSpaceDocumentError
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 import difflib
 import os

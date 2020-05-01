@@ -1,15 +1,29 @@
-from __future__ import print_function, division, absolute_import
 from fontTools.misc.py23 import *
-from fontTools.ttLib import TTFont
-from fontTools.varLib import build
-from fontTools.varLib import main as varLib_main
-from fontTools.designspaceLib import DesignSpaceDocumentError
+from fontTools.ttLib import TTFont, newTable
+from fontTools.varLib import build, load_designspace
+from fontTools.varLib.errors import VarLibValidationError
+from fontTools.varLib.mutator import instantiateVariableFont
+from fontTools.varLib import main as varLib_main, load_masters
+from fontTools.varLib import set_default_weight_width_slant
+from fontTools.designspaceLib import (
+    DesignSpaceDocumentError, DesignSpaceDocument, SourceDescriptor,
+)
+from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 import difflib
 import os
 import shutil
 import sys
 import tempfile
 import unittest
+import pytest
+
+
+def reload_font(font):
+    """(De)serialize to get final binary layout."""
+    buf = BytesIO()
+    font.save(buf)
+    buf.seek(0)
+    return TTFont(buf)
 
 
 class BuildTest(unittest.TestCase):
@@ -95,7 +109,8 @@ class BuildTest(unittest.TestCase):
         return font, savepath
 
     def _run_varlib_build_test(self, designspace_name, font_name, tables,
-                               expected_ttx_name, save_before_dump=False):
+                               expected_ttx_name, save_before_dump=False,
+                               post_process_master=None):
         suffix = '.ttf'
         ds_path = self.get_test_input(designspace_name + '.designspace')
         ufo_dir = self.get_test_input('master_ufo')
@@ -104,7 +119,9 @@ class BuildTest(unittest.TestCase):
         self.temp_dir()
         ttx_paths = self.get_file_list(ttx_dir, '.ttx', font_name + '-')
         for path in ttx_paths:
-            self.compile_font(path, suffix, self.tempdir)
+            font, savepath = self.compile_font(path, suffix, self.tempdir)
+            if post_process_master is not None:
+                post_process_master(font, savepath)
 
         finder = lambda s: s.replace(ufo_dir, self.tempdir).replace('.ufo', suffix)
         varfont, model, _ = build(ds_path, finder)
@@ -113,10 +130,7 @@ class BuildTest(unittest.TestCase):
             # some data (e.g. counts printed in TTX inline comments) is only
             # calculated at compile time, so before we can compare the TTX
             # dumps we need to save to a temporary stream, and realod the font
-            buf = BytesIO()
-            varfont.save(buf)
-            buf.seek(0)
-            varfont = TTFont(buf)
+            varfont = reload_font(varfont)
 
         expected_ttx_path = self.get_test_output(expected_ttx_name + '.ttx')
         self.expect_ttx(varfont, expected_ttx_path, tables)
@@ -160,7 +174,7 @@ class BuildTest(unittest.TestCase):
         avar segment will not be empty but will contain the default axis value
         maps: {-1.0: -1.0, 0.0: 0.0, 1.0: 1.0}.
 
-        This is to to work around an issue with some rasterizers:
+        This is to work around an issue with some rasterizers:
         https://github.com/googlei18n/fontmake/issues/295
         https://github.com/fonttools/fonttools/issues/1011
         """
@@ -180,7 +194,7 @@ class BuildTest(unittest.TestCase):
         resulting avar segment still contains the default axis value maps:
         {-1.0: -1.0, 0.0: 0.0, 1.0: 1.0}.
 
-        This is again to to work around an issue with some rasterizers:
+        This is again to work around an issue with some rasterizers:
         https://github.com/googlei18n/fontmake/issues/295
         https://github.com/fonttools/fonttools/issues/1011
         """
@@ -203,6 +217,172 @@ class BuildTest(unittest.TestCase):
             expected_ttx_name="FeatureVars",
             save_before_dump=True,
         )
+
+    def test_varlib_build_feature_variations_with_existing_rclt(self):
+        """Designspace file contains <rules> element, used to build GSUB
+        FeatureVariations table. <rules> is specified to do its OT processing
+        "last", so a 'rclt' feature will be used or created. This test covers
+        the case when a 'rclt' already exists in the masters.
+
+        We dynamically add a 'rclt' feature to an existing set of test
+        masters, to avoid adding more test data.
+
+        The multiple languages are done to verify whether multiple existing
+        'rclt' features are updated correctly.
+        """
+        def add_rclt(font, savepath):
+            features = """
+            languagesystem DFLT dflt;
+            languagesystem latn dflt;
+            languagesystem latn NLD;
+
+            feature rclt {
+                script latn;
+                language NLD;
+                lookup A {
+                    sub uni0041 by uni0061;
+                } A;
+                language dflt;
+                lookup B {
+                    sub uni0041 by uni0061;
+                } B;
+            } rclt;
+            """
+            addOpenTypeFeaturesFromString(font, features)
+            font.save(savepath)
+        self._run_varlib_build_test(
+            designspace_name="FeatureVars",
+            font_name="TestFamily",
+            tables=["fvar", "GSUB"],
+            expected_ttx_name="FeatureVars_rclt",
+            save_before_dump=True,
+            post_process_master=add_rclt,
+        )
+
+    def test_varlib_gvar_explicit_delta(self):
+        """The variable font contains a composite glyph odieresis which does not
+        need a gvar entry, because all its deltas are 0, but it must be added
+        anyway to work around an issue with macOS 10.14.
+
+        https://github.com/fonttools/fonttools/issues/1381
+        """
+        test_name = 'BuildGvarCompositeExplicitDelta'
+        self._run_varlib_build_test(
+            designspace_name=test_name,
+            font_name='TestFamily4',
+            tables=['gvar'],
+            expected_ttx_name=test_name
+        )
+
+    def test_varlib_nonmarking_CFF2(self):
+        ds_path = self.get_test_input('TestNonMarkingCFF2.designspace')
+        ttx_dir = self.get_test_input("master_non_marking_cff2")
+        expected_ttx_path = self.get_test_output("TestNonMarkingCFF2.ttx")
+
+        self.temp_dir()
+        for path in self.get_file_list(ttx_dir, '.ttx', 'TestNonMarkingCFF2_'):
+            self.compile_font(path, ".otf", self.tempdir)
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        for source in ds.sources:
+            source.path = os.path.join(
+                self.tempdir, os.path.basename(source.filename).replace(".ufo", ".otf")
+            )
+        ds.updatePaths()
+
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+
+        tables = ["CFF2"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
+
+    def test_varlib_build_CFF2(self):
+        ds_path = self.get_test_input('TestCFF2.designspace')
+        ttx_dir = self.get_test_input("master_cff2")
+        expected_ttx_path = self.get_test_output("BuildTestCFF2.ttx")
+
+        self.temp_dir()
+        for path in self.get_file_list(ttx_dir, '.ttx', 'TestCFF2_'):
+            self.compile_font(path, ".otf", self.tempdir)
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        for source in ds.sources:
+            source.path = os.path.join(
+                self.tempdir, os.path.basename(source.filename).replace(".ufo", ".otf")
+            )
+        ds.updatePaths()
+
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+
+        tables = ["fvar", "CFF2"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
+
+    def test_varlib_build_CFF2_from_CFF2(self):
+        ds_path = self.get_test_input('TestCFF2Input.designspace')
+        ttx_dir = self.get_test_input("master_cff2_input")
+        expected_ttx_path = self.get_test_output("BuildTestCFF2.ttx")
+
+        self.temp_dir()
+        for path in self.get_file_list(ttx_dir, '.ttx', 'TestCFF2_'):
+            self.compile_font(path, ".otf", self.tempdir)
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        for source in ds.sources:
+            source.path = os.path.join(
+                self.tempdir, os.path.basename(source.filename).replace(".ufo", ".otf")
+            )
+        ds.updatePaths()
+
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+
+        tables = ["fvar", "CFF2"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
+
+    def test_varlib_build_sparse_CFF2(self):
+        ds_path = self.get_test_input('TestSparseCFF2VF.designspace')
+        ttx_dir = self.get_test_input("master_sparse_cff2")
+        expected_ttx_path = self.get_test_output("TestSparseCFF2VF.ttx")
+
+        self.temp_dir()
+        for path in self.get_file_list(ttx_dir, '.ttx', 'MasterSet_Kanji-'):
+            self.compile_font(path, ".otf", self.tempdir)
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        for source in ds.sources:
+            source.path = os.path.join(
+                self.tempdir, os.path.basename(source.filename).replace(".ufo", ".otf")
+            )
+        ds.updatePaths()
+
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+
+        tables = ["fvar", "CFF2"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
+
+    def test_varlib_build_vpal(self):
+        ds_path = self.get_test_input('test_vpal.designspace')
+        ttx_dir = self.get_test_input("master_vpal_test")
+        expected_ttx_path = self.get_test_output("test_vpal.ttx")
+
+        self.temp_dir()
+        for path in self.get_file_list(ttx_dir, '.ttx', 'master_vpal_test_'):
+            self.compile_font(path, ".otf", self.tempdir)
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        for source in ds.sources:
+            source.path = os.path.join(
+                self.tempdir, os.path.basename(source.filename).replace(".ufo", ".otf")
+            )
+        ds.updatePaths()
+
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+
+        tables = ["GPOS"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
 
     def test_varlib_main_ttf(self):
         """Mostly for testing varLib.main()
@@ -249,6 +429,442 @@ class BuildTest(unittest.TestCase):
         tables = [table_tag for table_tag in varfont.keys() if table_tag != 'head']
         expected_ttx_path = self.get_test_output('BuildMain.ttx')
         self.expect_ttx(varfont, expected_ttx_path, tables)
+
+    def test_varlib_build_from_ds_object_in_memory_ttfonts(self):
+        ds_path = self.get_test_input("Build.designspace")
+        ttx_dir = self.get_test_input("master_ttx_interpolatable_ttf")
+        expected_ttx_path = self.get_test_output("BuildMain.ttx")
+
+        self.temp_dir()
+        for path in self.get_file_list(ttx_dir, '.ttx', 'TestFamily-'):
+            self.compile_font(path, ".ttf", self.tempdir)
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        for source in ds.sources:
+            filename = os.path.join(
+                self.tempdir, os.path.basename(source.filename).replace(".ufo", ".ttf")
+            )
+            source.font = TTFont(
+                filename, recalcBBoxes=False, recalcTimestamp=False, lazy=True
+            )
+            source.filename = None  # Make sure no file path gets into build()
+
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+        tables = [table_tag for table_tag in varfont.keys() if table_tag != "head"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
+
+    def test_varlib_build_from_ttf_paths(self):
+        ds_path = self.get_test_input("Build.designspace")
+        ttx_dir = self.get_test_input("master_ttx_interpolatable_ttf")
+        expected_ttx_path = self.get_test_output("BuildMain.ttx")
+
+        self.temp_dir()
+        for path in self.get_file_list(ttx_dir, '.ttx', 'TestFamily-'):
+            self.compile_font(path, ".ttf", self.tempdir)
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        for source in ds.sources:
+            source.path = os.path.join(
+                self.tempdir, os.path.basename(source.filename).replace(".ufo", ".ttf")
+            )
+        ds.updatePaths()
+
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+        tables = [table_tag for table_tag in varfont.keys() if table_tag != "head"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
+
+    def test_varlib_build_from_ttx_paths(self):
+        ds_path = self.get_test_input("Build.designspace")
+        ttx_dir = self.get_test_input("master_ttx_interpolatable_ttf")
+        expected_ttx_path = self.get_test_output("BuildMain.ttx")
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        for source in ds.sources:
+            source.path = os.path.join(
+                ttx_dir, os.path.basename(source.filename).replace(".ufo", ".ttx")
+            )
+        ds.updatePaths()
+
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+        tables = [table_tag for table_tag in varfont.keys() if table_tag != "head"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
+
+    def test_varlib_build_sparse_masters(self):
+        ds_path = self.get_test_input("SparseMasters.designspace")
+        expected_ttx_path = self.get_test_output("SparseMasters.ttx")
+
+        varfont, _, _ = build(ds_path)
+        varfont = reload_font(varfont)
+        tables = [table_tag for table_tag in varfont.keys() if table_tag != "head"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
+
+    def test_varlib_build_lazy_masters(self):
+        # See https://github.com/fonttools/fonttools/issues/1808
+        ds_path = self.get_test_input("SparseMasters.designspace")
+        expected_ttx_path = self.get_test_output("SparseMasters.ttx")
+
+        def _open_font(master_path, master_finder=lambda s: s):
+            font = TTFont()
+            font.importXML(master_path)
+            buf = BytesIO()
+            font.save(buf, reorderTables=False)
+            buf.seek(0)
+            font = TTFont(buf, lazy=True)  # reopen in lazy mode, to reproduce #1808
+            return font
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        ds.loadSourceFonts(_open_font)
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+        tables = [table_tag for table_tag in varfont.keys() if table_tag != "head"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
+
+    def test_varlib_build_sparse_masters_MVAR(self):
+        import fontTools.varLib.mvar
+
+        ds_path = self.get_test_input("SparseMasters.designspace")
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        load_masters(ds)
+
+        # Trigger MVAR generation so varLib is forced to create deltas with a
+        # sparse master inbetween.
+        font_0_os2 = ds.sources[0].font["OS/2"]
+        font_0_os2.sTypoAscender = 1
+        font_0_os2.sTypoDescender = 1
+        font_0_os2.sTypoLineGap = 1
+        font_0_os2.usWinAscent = 1
+        font_0_os2.usWinDescent = 1
+        font_0_os2.sxHeight = 1
+        font_0_os2.sCapHeight = 1
+        font_0_os2.ySubscriptXSize = 1
+        font_0_os2.ySubscriptYSize = 1
+        font_0_os2.ySubscriptXOffset = 1
+        font_0_os2.ySubscriptYOffset = 1
+        font_0_os2.ySuperscriptXSize = 1
+        font_0_os2.ySuperscriptYSize = 1
+        font_0_os2.ySuperscriptXOffset = 1
+        font_0_os2.ySuperscriptYOffset = 1
+        font_0_os2.yStrikeoutSize = 1
+        font_0_os2.yStrikeoutPosition = 1
+        font_0_vhea = newTable("vhea")
+        font_0_vhea.ascent = 1
+        font_0_vhea.descent = 1
+        font_0_vhea.lineGap = 1
+        font_0_vhea.caretSlopeRise = 1
+        font_0_vhea.caretSlopeRun = 1
+        font_0_vhea.caretOffset = 1
+        ds.sources[0].font["vhea"] = font_0_vhea
+        font_0_hhea = ds.sources[0].font["hhea"]
+        font_0_hhea.caretSlopeRise = 1
+        font_0_hhea.caretSlopeRun = 1
+        font_0_hhea.caretOffset = 1
+        font_0_post = ds.sources[0].font["post"]
+        font_0_post.underlineThickness = 1
+        font_0_post.underlinePosition = 1
+
+        font_2_os2 = ds.sources[2].font["OS/2"]
+        font_2_os2.sTypoAscender = 800
+        font_2_os2.sTypoDescender = 800
+        font_2_os2.sTypoLineGap = 800
+        font_2_os2.usWinAscent = 800
+        font_2_os2.usWinDescent = 800
+        font_2_os2.sxHeight = 800
+        font_2_os2.sCapHeight = 800
+        font_2_os2.ySubscriptXSize = 800
+        font_2_os2.ySubscriptYSize = 800
+        font_2_os2.ySubscriptXOffset = 800
+        font_2_os2.ySubscriptYOffset = 800
+        font_2_os2.ySuperscriptXSize = 800
+        font_2_os2.ySuperscriptYSize = 800
+        font_2_os2.ySuperscriptXOffset = 800
+        font_2_os2.ySuperscriptYOffset = 800
+        font_2_os2.yStrikeoutSize = 800
+        font_2_os2.yStrikeoutPosition = 800
+        font_2_vhea = newTable("vhea")
+        font_2_vhea.ascent = 800
+        font_2_vhea.descent = 800
+        font_2_vhea.lineGap = 800
+        font_2_vhea.caretSlopeRise = 800
+        font_2_vhea.caretSlopeRun = 800
+        font_2_vhea.caretOffset = 800
+        ds.sources[2].font["vhea"] = font_2_vhea
+        font_2_hhea = ds.sources[2].font["hhea"]
+        font_2_hhea.caretSlopeRise = 800
+        font_2_hhea.caretSlopeRun = 800
+        font_2_hhea.caretOffset = 800
+        font_2_post = ds.sources[2].font["post"]
+        font_2_post.underlineThickness = 800
+        font_2_post.underlinePosition = 800
+
+        varfont, _, _ = build(ds)
+        mvar_tags = [vr.ValueTag for vr in varfont["MVAR"].table.ValueRecord]
+        assert all(tag in mvar_tags for tag in fontTools.varLib.mvar.MVAR_ENTRIES)
+
+    def test_varlib_build_VVAR_CFF2(self):
+        ds_path = self.get_test_input('TestVVAR.designspace')
+        ttx_dir = self.get_test_input("master_vvar_cff2")
+        expected_ttx_name = 'TestVVAR'
+        suffix = '.otf'
+
+        self.temp_dir()
+        for path in self.get_file_list(ttx_dir, '.ttx', 'TestVVAR'):
+            font, savepath = self.compile_font(path, suffix, self.tempdir)
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        for source in ds.sources:
+            source.path = os.path.join(
+                self.tempdir, os.path.basename(source.filename).replace(".ufo", suffix)
+            )
+        ds.updatePaths()
+
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+
+        expected_ttx_path = self.get_test_output(expected_ttx_name + '.ttx')
+        tables = ["VVAR"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
+        self.check_ttx_dump(varfont, expected_ttx_path, tables, suffix)
+
+    def test_varlib_build_BASE(self):
+        ds_path = self.get_test_input('TestBASE.designspace')
+        ttx_dir = self.get_test_input("master_base_test")
+        expected_ttx_name = 'TestBASE'
+        suffix = '.otf'
+
+        self.temp_dir()
+        for path in self.get_file_list(ttx_dir, '.ttx', 'TestBASE'):
+            font, savepath = self.compile_font(path, suffix, self.tempdir)
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        for source in ds.sources:
+            source.path = os.path.join(
+                self.tempdir, os.path.basename(source.filename).replace(".ufo", suffix)
+            )
+        ds.updatePaths()
+
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+
+        expected_ttx_path = self.get_test_output(expected_ttx_name + '.ttx')
+        tables = ["BASE"]
+        self.expect_ttx(varfont, expected_ttx_path, tables)
+        self.check_ttx_dump(varfont, expected_ttx_path, tables, suffix)
+
+    def test_varlib_build_single_master(self):
+        self._run_varlib_build_test(
+            designspace_name='SingleMaster',
+            font_name='TestFamily',
+            tables=['GDEF', 'HVAR', 'MVAR', 'STAT', 'fvar', 'cvar', 'gvar', 'name'],
+            expected_ttx_name='SingleMaster',
+            save_before_dump=True,
+        )
+
+    def test_kerning_merging(self):
+        """Test the correct merging of class-based pair kerning.
+
+        Problem description at https://github.com/fonttools/fonttools/pull/1638.
+        Test font and Designspace generated by 
+        https://gist.github.com/madig/183d0440c9f7d05f04bd1280b9664bd1.
+        """
+        ds_path = self.get_test_input("KerningMerging.designspace")
+        ttx_dir = self.get_test_input("master_kerning_merging")
+
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        for source in ds.sources:
+            ttx_dump = TTFont()
+            ttx_dump.importXML(
+                os.path.join(
+                    ttx_dir, os.path.basename(source.filename).replace(".ttf", ".ttx")
+                )
+            )
+            source.font = reload_font(ttx_dump)
+
+        varfont, _, _ = build(ds)
+        varfont = reload_font(varfont)
+
+        class_kerning_tables = [
+            t
+            for l in varfont["GPOS"].table.LookupList.Lookup
+            for t in l.SubTable
+            if t.Format == 2
+        ]
+        assert len(class_kerning_tables) == 1
+        class_kerning_table = class_kerning_tables[0]
+
+        # Test that no class kerned against class zero (containing all glyphs not
+        # classed) has a `XAdvDevice` table attached, which in the variable font
+        # context is a "VariationIndex" table and points to kerning deltas in the GDEF
+        # table. Variation deltas of any kerning class against class zero should
+        # probably never exist.
+        for class1_record in class_kerning_table.Class1Record:
+            class2_zero = class1_record.Class2Record[0]
+            assert getattr(class2_zero.Value1, "XAdvDevice", None) is None
+
+        # Assert the variable font's kerning table (without deltas) is equal to the
+        # default font's kerning table. The bug fixed in 
+        # https://github.com/fonttools/fonttools/pull/1638 caused rogue kerning
+        # values to be written to the variable font.
+        assert _extract_flat_kerning(varfont, class_kerning_table) == {
+            ("A", ".notdef"): 0,
+            ("A", "A"): 0,
+            ("A", "B"): -20,
+            ("A", "C"): 0,
+            ("A", "D"): -20,
+            ("B", ".notdef"): 0,
+            ("B", "A"): 0,
+            ("B", "B"): 0,
+            ("B", "C"): 0,
+            ("B", "D"): 0,
+        }
+
+        instance_thin = instantiateVariableFont(varfont, {"wght": 100})
+        instance_thin_kerning_table = (
+            instance_thin["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+        )
+        assert _extract_flat_kerning(instance_thin, instance_thin_kerning_table) == {
+            ("A", ".notdef"): 0,
+            ("A", "A"): 0,
+            ("A", "B"): 0,
+            ("A", "C"): 10,
+            ("A", "D"): 0,
+            ("B", ".notdef"): 0,
+            ("B", "A"): 0,
+            ("B", "B"): 0,
+            ("B", "C"): 10,
+            ("B", "D"): 0,
+        }
+
+        instance_black = instantiateVariableFont(varfont, {"wght": 900})
+        instance_black_kerning_table = (
+            instance_black["GPOS"].table.LookupList.Lookup[0].SubTable[0]
+        )
+        assert _extract_flat_kerning(instance_black, instance_black_kerning_table) == {
+            ("A", ".notdef"): 0,
+            ("A", "A"): 0,
+            ("A", "B"): 0,
+            ("A", "C"): 0,
+            ("A", "D"): 40,
+            ("B", ".notdef"): 0,
+            ("B", "A"): 0,
+            ("B", "B"): 0,
+            ("B", "C"): 0,
+            ("B", "D"): 40,
+        }
+
+    def test_designspace_fill_in_location(self):
+        ds_path = self.get_test_input("VarLibLocationTest.designspace")
+        ds = DesignSpaceDocument.fromfile(ds_path)
+        ds_loaded = load_designspace(ds)
+
+        assert ds_loaded.instances[0].location == {"weight": 0, "width": 50}
+
+
+def test_load_masters_layerName_without_required_font():
+    ds = DesignSpaceDocument()
+    s = SourceDescriptor()
+    s.font = None
+    s.layerName = "Medium"
+    ds.addSource(s)
+
+    with pytest.raises(
+        VarLibValidationError,
+        match="specified a layer name but lacks the required TTFont object",
+    ):
+        load_masters(ds)
+
+
+def _extract_flat_kerning(font, pairpos_table):
+    extracted_kerning = {}
+    for glyph_name_1 in pairpos_table.Coverage.glyphs:
+        class_def_1 = pairpos_table.ClassDef1.classDefs.get(glyph_name_1, 0)
+        for glyph_name_2 in font.getGlyphOrder():
+            class_def_2 = pairpos_table.ClassDef2.classDefs.get(glyph_name_2, 0)
+            kern_value = (
+                pairpos_table.Class1Record[class_def_1]
+                .Class2Record[class_def_2]
+                .Value1.XAdvance
+            )
+            extracted_kerning[(glyph_name_1, glyph_name_2)] = kern_value
+    return extracted_kerning
+
+
+@pytest.fixture
+def ttFont():
+    f = TTFont()
+    f["OS/2"] = newTable("OS/2")
+    f["OS/2"].usWeightClass = 400
+    f["OS/2"].usWidthClass = 100
+    f["post"] = newTable("post")
+    f["post"].italicAngle = 0
+    return f
+
+
+class SetDefaultWeightWidthSlantTest(object):
+    @pytest.mark.parametrize(
+        "location, expected",
+        [
+            ({"wght": 0}, 1),
+            ({"wght": 1}, 1),
+            ({"wght": 100}, 100),
+            ({"wght": 1000}, 1000),
+            ({"wght": 1001}, 1000),
+        ],
+    )
+    def test_wght(self, ttFont, location, expected):
+        set_default_weight_width_slant(ttFont, location)
+
+        assert ttFont["OS/2"].usWeightClass == expected
+
+    @pytest.mark.parametrize(
+        "location, expected",
+        [
+            ({"wdth": 0}, 1),
+            ({"wdth": 56}, 1),
+            ({"wdth": 57}, 2),
+            ({"wdth": 62.5}, 2),
+            ({"wdth": 75}, 3),
+            ({"wdth": 87.5}, 4),
+            ({"wdth": 100}, 5),
+            ({"wdth": 112.5}, 6),
+            ({"wdth": 125}, 7),
+            ({"wdth": 150}, 8),
+            ({"wdth": 200}, 9),
+            ({"wdth": 201}, 9),
+            ({"wdth": 1000}, 9),
+        ],
+    )
+    def test_wdth(self, ttFont, location, expected):
+        set_default_weight_width_slant(ttFont, location)
+
+        assert ttFont["OS/2"].usWidthClass == expected
+
+    @pytest.mark.parametrize(
+        "location, expected",
+        [
+            ({"slnt": -91}, -90),
+            ({"slnt": -90}, -90),
+            ({"slnt": 0}, 0),
+            ({"slnt": 11.5}, 11.5),
+            ({"slnt": 90}, 90),
+            ({"slnt": 91}, 90),
+        ],
+    )
+    def test_slnt(self, ttFont, location, expected):
+        set_default_weight_width_slant(ttFont, location)
+
+        assert ttFont["post"].italicAngle == expected
+
+    def test_all(self, ttFont):
+        set_default_weight_width_slant(
+            ttFont, {"wght": 500, "wdth": 150, "slnt": -12.0}
+        )
+
+        assert ttFont["OS/2"].usWeightClass == 500
+        assert ttFont["OS/2"].usWidthClass == 8
+        assert ttFont["post"].italicAngle == -12.0
 
 
 if __name__ == "__main__":

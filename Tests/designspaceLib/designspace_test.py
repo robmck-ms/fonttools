@@ -1,16 +1,16 @@
 # coding=utf-8
 
-from __future__ import (print_function, division, absolute_import,
-                        unicode_literals)
-
 import os
+import sys
 import pytest
 import warnings
 
 from fontTools.misc.py23 import open
+from fontTools.misc import plistlib
 from fontTools.designspaceLib import (
     DesignSpaceDocument, SourceDescriptor, AxisDescriptor, RuleDescriptor,
     InstanceDescriptor, evaluateRule, processRules, posix, DesignSpaceDocumentError)
+from fontTools import ttLib
 
 def _axesAsDict(axes):
     """
@@ -49,6 +49,7 @@ def test_fill_document(tmpdir):
     instancePath1 = os.path.join(tmpdir, "instances", "instanceTest1.ufo")
     instancePath2 = os.path.join(tmpdir, "instances", "instanceTest2.ufo")
     doc = DesignSpaceDocument()
+    doc.rulesProcessingLast = True
 
     # write some axes
     a1 = AxisDescriptor()
@@ -64,10 +65,10 @@ def test_fill_document(tmpdir):
     a2 = AxisDescriptor()
     a2.minimum = 0
     a2.maximum = 1000
-    a2.default = 20
+    a2.default = 15
     a2.name = "width"
     a2.tag = "wdth"
-    a2.map = [(0.0, 10.0), (401.0, 66.0), (1000.0, 990.0)]
+    a2.map = [(0.0, 10.0), (15.0, 20.0), (401.0, 66.0), (1000.0, 990.0)]
     a2.hidden = True
     a2.labelNames[u'fr'] = u"Chasse"
     doc.addAxis(a2)
@@ -123,6 +124,7 @@ def test_fill_document(tmpdir):
     i1.styleMapStyleName = "InstanceStyleMapStyleName"
     glyphData = dict(name="arrow", mute=True, unicodes=[0x123, 0x124, 0x125])
     i1.glyphs['arrow'] = glyphData
+    i1.lib['com.coolDesignspaceApp.binaryData'] = plistlib.Data(b'<binary gunk>')
     i1.lib['com.coolDesignspaceApp.specimenText'] = "Hamburgerwhatever"
     doc.addInstance(i1)
     # add instance 2
@@ -235,12 +237,10 @@ def test_unicodes(tmpdir):
     new.read(testDocPath)
     new.write(testDocPath2)
     # compare the file contents
-    f1 = open(testDocPath, 'r', encoding='utf-8')
-    t1 = f1.read()
-    f1.close()
-    f2 = open(testDocPath2, 'r', encoding='utf-8')
-    t2 = f2.read()
-    f2.close()
+    with open(testDocPath, 'r', encoding='utf-8') as f1:
+        t1 = f1.read()
+    with open(testDocPath2, 'r', encoding='utf-8') as f2:
+        t2 = f2.read()
     assert t1 == t2
     # check the unicode values read from the document
     assert new.instances[0].glyphs['arrow']['unicodes'] == [100,200,300]
@@ -335,12 +335,10 @@ def test_localisedNames(tmpdir):
     new = DesignSpaceDocument()
     new.read(testDocPath)
     new.write(testDocPath2)
-    f1 = open(testDocPath, 'r', encoding='utf-8')
-    t1 = f1.read()
-    f1.close()
-    f2 = open(testDocPath2, 'r', encoding='utf-8')
-    t2 = f2.read()
-    f2.close()
+    with open(testDocPath, 'r', encoding='utf-8') as f1:
+        t1 = f1.read()
+    with open(testDocPath2, 'r', encoding='utf-8') as f2:
+        t2 = f2.read()
     assert t1 == t2
 
 
@@ -620,7 +618,7 @@ def test_normalise4():
     for axis in doc.axes:
         r.append((axis.name, axis.map))
     r.sort()
-    assert r == [('ddd', [(0, 0.1), (300, 0.5), (600, 0.5), (1000, 0.9)])]
+    assert r == [('ddd', [(0, 0.0), (300, 0.5), (600, 0.5), (1000, 1.0)])]
 
 def test_axisMapping():
     # note: because designspance lib does not do any actual
@@ -639,7 +637,7 @@ def test_axisMapping():
     for axis in doc.axes:
         r.append((axis.name, axis.map))
     r.sort()
-    assert r == [('ddd', [(0, 0.1), (300, 0.5), (600, 0.5), (1000, 0.9)])]
+    assert r == [('ddd', [(0, 0.0), (300, 0.5), (600, 0.5), (1000, 1.0)])]
 
 def test_rulesConditions(tmpdir):
     # tests of rules, conditionsets and conditions
@@ -701,6 +699,7 @@ def test_rulesDocument(tmpdir):
     testDocPath = os.path.join(tmpdir, "testRules.designspace")
     testDocPath2 = os.path.join(tmpdir, "testRules_roundtrip.designspace")
     doc = DesignSpaceDocument()
+    doc.rulesProcessingLast = True
     a1 = AxisDescriptor()
     a1.minimum = 0
     a1.maximum = 1000
@@ -744,6 +743,7 @@ def test_rulesDocument(tmpdir):
     _addUnwrappedCondition(testDocPath)
     doc2 = DesignSpaceDocument()
     doc2.read(testDocPath)
+    assert doc2.rulesProcessingLast
     assert len(doc2.axes) == 2
     assert len(doc2.rules) == 1
     assert len(doc2.rules[0].conditionSets) == 2
@@ -759,14 +759,12 @@ def _addUnwrappedCondition(path):
     # only for testing, so we can make an invalid designspace file
     # older designspace files may have conditions that are not wrapped in a conditionset
     # These can be read into a new conditionset.
-    f = open(path, 'r', encoding='utf-8')
-    d = f.read()
+    with open(path, 'r', encoding='utf-8') as f:
+        d = f.read()
     print(d)
-    f.close()
     d = d.replace('<rule name="named.rule.1">', '<rule name="named.rule.1">\n\t<condition maximum="22" minimum="33" name="axisName_a" />')
-    f = open(path, 'w', encoding='utf-8')
-    f.write(d)
-    f.close()
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(d)
 
 def test_documentLib(tmpdir):
     # roundtrip test of the document lib with some nested data
@@ -789,3 +787,232 @@ def test_documentLib(tmpdir):
     assert dummyKey in new.lib
     assert new.lib[dummyKey] == dummyData
 
+
+def test_updatePaths(tmpdir):
+    doc = DesignSpaceDocument()
+    doc.path = str(tmpdir / "foo" / "bar" / "MyDesignspace.designspace")
+
+    s1 = SourceDescriptor()
+    doc.addSource(s1)
+
+    doc.updatePaths()
+
+    # expect no changes
+    assert s1.path is None
+    assert s1.filename is None
+
+    name1 = "../masters/Source1.ufo"
+    path1 = posix(str(tmpdir / "foo" / "masters" / "Source1.ufo"))
+
+    s1.path = path1
+    s1.filename = None
+
+    doc.updatePaths()
+
+    assert s1.path == path1
+    assert s1.filename == name1  # empty filename updated
+
+    name2 = "../masters/Source2.ufo"
+    s1.filename = name2
+
+    doc.updatePaths()
+
+    # conflicting filename discarded, path always gets precedence
+    assert s1.path == path1
+    assert s1.filename == "../masters/Source1.ufo"
+
+    s1.path = None
+    s1.filename = name2
+
+    doc.updatePaths()
+
+    # expect no changes
+    assert s1.path is None
+    assert s1.filename == name2
+
+
+@pytest.mark.skipif(sys.version_info[:2] < (3, 6), reason="pathlib is only tested on 3.6 and up")
+def test_read_with_path_object():
+    import pathlib
+    source = (pathlib.Path(__file__) / "../data/test.designspace").resolve()
+    assert source.exists()
+    doc = DesignSpaceDocument()
+    doc.read(source)
+
+
+@pytest.mark.skipif(sys.version_info[:2] < (3, 6), reason="pathlib is only tested on 3.6 and up")
+def test_with_with_path_object(tmpdir):
+    import pathlib
+    tmpdir = str(tmpdir)
+    dest = pathlib.Path(tmpdir) / "test.designspace"
+    doc = DesignSpaceDocument()
+    doc.write(dest)
+    assert dest.exists()
+
+
+def test_findDefault_axis_mapping():
+    designspace_string = """\
+<?xml version='1.0' encoding='UTF-8'?>
+<designspace format="4.0">
+  <axes>
+    <axis tag="wght" name="Weight" minimum="100" maximum="800" default="400">
+      <map input="100" output="20"/>
+      <map input="300" output="40"/>
+      <map input="400" output="80"/>
+      <map input="700" output="126"/>
+      <map input="800" output="170"/>
+    </axis>
+    <axis tag="ital" name="Italic" minimum="0" maximum="1" default="1"/>
+  </axes>
+  <sources>
+    <source filename="Font-Light.ufo">
+      <location>
+        <dimension name="Weight" xvalue="20"/>
+        <dimension name="Italic" xvalue="0"/>
+      </location>
+    </source>
+    <source filename="Font-Regular.ufo">
+      <location>
+        <dimension name="Weight" xvalue="80"/>
+        <dimension name="Italic" xvalue="0"/>
+      </location>
+    </source>
+    <source filename="Font-Bold.ufo">
+      <location>
+        <dimension name="Weight" xvalue="170"/>
+        <dimension name="Italic" xvalue="0"/>
+      </location>
+    </source>
+    <source filename="Font-LightItalic.ufo">
+      <location>
+        <dimension name="Weight" xvalue="20"/>
+        <dimension name="Italic" xvalue="1"/>
+      </location>
+    </source>
+    <source filename="Font-Italic.ufo">
+      <location>
+        <dimension name="Weight" xvalue="80"/>
+        <dimension name="Italic" xvalue="1"/>
+      </location>
+    </source>
+    <source filename="Font-BoldItalic.ufo">
+      <location>
+        <dimension name="Weight" xvalue="170"/>
+        <dimension name="Italic" xvalue="1"/>
+      </location>
+    </source>
+  </sources>
+</designspace>
+    """
+    designspace = DesignSpaceDocument.fromstring(designspace_string)
+    assert designspace.findDefault().filename == "Font-Italic.ufo"
+
+    designspace.axes[1].default = 0
+
+    assert designspace.findDefault().filename == "Font-Regular.ufo"
+
+
+def test_loadSourceFonts():
+
+    def opener(path):
+        font = ttLib.TTFont()
+        font.importXML(path)
+        return font
+
+    # this designspace file contains .TTX source paths
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "varLib",
+        "data",
+        "SparseMasters.designspace"
+    )
+    designspace = DesignSpaceDocument.fromfile(path)
+
+    # force two source descriptors to have the same path
+    designspace.sources[1].path = designspace.sources[0].path
+
+    fonts = designspace.loadSourceFonts(opener)
+
+    assert len(fonts) == 3
+    assert all(isinstance(font, ttLib.TTFont) for font in fonts)
+    assert fonts[0] is fonts[1]  # same path, identical font object
+
+    fonts2 = designspace.loadSourceFonts(opener)
+
+    for font1, font2 in zip(fonts, fonts2):
+        assert font1 is font2
+
+
+def test_loadSourceFonts_no_required_path():
+    designspace = DesignSpaceDocument()
+    designspace.sources.append(SourceDescriptor())
+
+    with pytest.raises(DesignSpaceDocumentError, match="no 'path' attribute"):
+        designspace.loadSourceFonts(lambda p: p)
+
+
+def test_addAxisDescriptor():
+    ds = DesignSpaceDocument()
+
+    axis = ds.addAxisDescriptor(
+      name="Weight", tag="wght", minimum=100, default=400, maximum=900
+    )
+
+    assert ds.axes[0] is axis
+    assert isinstance(axis, AxisDescriptor)
+    assert axis.name == "Weight"
+    assert axis.tag == "wght"
+    assert axis.minimum == 100
+    assert axis.default == 400
+    assert axis.maximum == 900
+
+
+def test_addSourceDescriptor():
+    ds = DesignSpaceDocument()
+
+    source = ds.addSourceDescriptor(name="TestSource", location={"Weight": 400})
+
+    assert ds.sources[0] is source
+    assert isinstance(source, SourceDescriptor)
+    assert source.name == "TestSource"
+    assert source.location == {"Weight": 400}
+
+
+def test_addInstanceDescriptor():
+    ds = DesignSpaceDocument()
+
+    instance = ds.addInstanceDescriptor(
+      name="TestInstance",
+      location={"Weight": 400},
+      styleName="Regular",
+      styleMapStyleName="regular",
+    )
+
+    assert ds.instances[0] is instance
+    assert isinstance(instance, InstanceDescriptor)
+    assert instance.name == "TestInstance"
+    assert instance.location == {"Weight": 400}
+    assert instance.styleName == "Regular"
+    assert instance.styleMapStyleName == "regular"
+
+
+def test_addRuleDescriptor():
+    ds = DesignSpaceDocument()
+
+    rule = ds.addRuleDescriptor(
+      name="TestRule",
+      conditionSets=[
+          dict(name='Weight', minimum=100, maximum=200),
+          dict(name='Weight', minimum=700, maximum=900),
+      ],
+      subs=[("a", "a.alt")],
+    )
+
+    assert ds.rules[0] is rule
+    assert isinstance(rule, RuleDescriptor)
+    assert rule.name == "TestRule"
+    assert rule.conditionSets == [
+        dict(name='Weight', minimum=100, maximum=200),
+        dict(name='Weight', minimum=700, maximum=900),
+    ]
+    assert rule.subs == [("a", "a.alt")]

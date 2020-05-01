@@ -1,7 +1,6 @@
 # Copyright (c) 2009 Type Supply LLC
 # Author: Tal Leming
 
-from __future__ import print_function, division, absolute_import
 from fontTools.misc.py23 import *
 from fontTools.misc.fixedTools import otRound
 from fontTools.misc.psCharStrings import T2CharString
@@ -9,26 +8,26 @@ from fontTools.pens.basePen import BasePen
 from fontTools.cffLib.specializer import specializeCommands, commandsToProgram
 
 
+def t2c_round(number, tolerance=0.5):
+    if tolerance == 0:
+        return number  # no-op
+    rounded = otRound(number)
+    # return rounded integer if the tolerance >= 0.5, or if the absolute
+    # difference between the original float and the rounded integer is
+    # within the tolerance
+    if tolerance >= .5 or abs(rounded - number) <= tolerance:
+        return rounded
+    else:
+        # else return the value un-rounded
+        return number
+
 def makeRoundFunc(tolerance):
     if tolerance < 0:
         raise ValueError("Rounding tolerance must be positive")
 
-    def _round(number):
-        if tolerance == 0:
-            return number  # no-op
-        rounded = otRound(number)
-        # return rounded integer if the tolerance >= 0.5, or if the absolute
-        # difference between the original float and the rounded integer is
-        # within the tolerance
-        if tolerance >= .5 or abs(rounded - number) <= tolerance:
-            return rounded
-        else:
-            # else return the value un-rounded
-            return number
-
     def roundPoint(point):
         x, y = point
-        return _round(x), _round(y)
+        return t2c_round(x, tolerance), t2c_round(y, tolerance)
 
     return roundPoint
 

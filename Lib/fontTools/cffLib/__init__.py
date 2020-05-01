@@ -1,6 +1,5 @@
 """cffLib.py -- read/write tools for Adobe CFF fonts."""
 
-from __future__ import print_function, division, absolute_import
 from fontTools.misc.py23 import *
 from fontTools.misc import sstruct
 from fontTools.misc import psCharStrings
@@ -207,6 +206,13 @@ class CFFFontSet(object):
 					continue
 				name, attrs, content = element
 				topDict.fromXML(name, attrs, content)
+
+			if hasattr(topDict, "VarStore") and topDict.FDArray[0].vstore is None:
+				fdArray = topDict.FDArray
+				for fontDict in fdArray:
+					if hasattr(fontDict, "Private"):
+						fontDict.Private.vstore = topDict.VarStore
+
 		elif name == "GlobalSubrs":
 			subrCharStringClass = psCharStrings.T2CharString
 			if not hasattr(self, "GlobalSubrs"):
@@ -607,6 +613,9 @@ class Index(object):
 	def getCompiler(self, strings, parent, isCFF2=None):
 		return self.compilerClass(self, strings, parent, isCFF2=isCFF2)
 
+	def clear(self):
+		del self.items[:]
+
 
 class GlobalSubrsIndex(Index):
 
@@ -623,11 +632,6 @@ class GlobalSubrsIndex(Index):
 			self.fdSelect = fdSelect
 		if fdArray:
 			self.fdArray = fdArray
-		if isCFF2:
-			# CFF2Subr's can have numeric arguments on the stack after the last operator.
-			self.subrClass = psCharStrings.CFF2Subr
-			self.charStringClass = psCharStrings.CFF2Subr
-			
 
 	def produceItem(self, index, data, file, offset):
 		if self.private is not None:
@@ -826,6 +830,23 @@ class FDSelect(object):
 					for glyphID in range(prev, first):
 						gidArray[glyphID] = fd
 				self.gidArray = gidArray
+			elif self.format == 4:
+				gidArray = [None] * numGlyphs
+				nRanges = readCard32(file)
+				fd = None
+				prev = None
+				for i in range(nRanges):
+					first = readCard32(file)
+					if prev is not None:
+						for glyphID in range(prev, first):
+							gidArray[glyphID] = fd
+					prev = first
+					fd = readCard16(file)
+				if prev is not None:
+					first = readCard32(file)
+					for glyphID in range(prev, first):
+						gidArray[glyphID] = fd
+				self.gidArray = gidArray
 			else:
 				assert False, "unsupported FDSelect format: %s" % format
 		else:
@@ -994,6 +1015,10 @@ def packCard8(value):
 
 def packCard16(value):
 	return struct.pack(">H", value)
+
+
+def packCard32(value):
+	return struct.pack(">L", value)
 
 
 def buildOperatorDict(table):
@@ -1294,6 +1319,20 @@ class CharsetConverter(SimpleConverter):
 				raise NotImplementedError
 			assert len(charset) == numGlyphs
 			log.log(DEBUG, "    charset end at %s", file.tell())
+			# make sure glyph names are unique
+			allNames = {}
+			newCharset = []
+			for glyphName in charset:
+				if glyphName in allNames:
+					# make up a new glyphName that's unique
+					n = allNames[glyphName]
+					while (glyphName + "#" + str(n)) in allNames:
+						n += 1
+					allNames[glyphName] = n + 1
+					glyphName = glyphName + "#" + str(n)
+				allNames[glyphName] = 1
+				newCharset.append(glyphName)
+			charset = newCharset
 		else:  # offset == 0 -> no charset data.
 			if isCID or "CharStrings" not in parent.rawDict:
 				# We get here only when processing fontDicts from the FDArray of
@@ -1727,6 +1766,27 @@ def packFDSelect3(fdSelectArray):
 	return bytesjoin(data)
 
 
+def packFDSelect4(fdSelectArray):
+	fmt = 4
+	fdRanges = []
+	lenArray = len(fdSelectArray)
+	lastFDIndex = -1
+	for i in range(lenArray):
+		fdIndex = fdSelectArray[i]
+		if lastFDIndex != fdIndex:
+			fdRanges.append([i, fdIndex])
+			lastFDIndex = fdIndex
+	sentinelGID = i + 1
+
+	data = [packCard8(fmt)]
+	data.append(packCard32(len(fdRanges)))
+	for fdRange in fdRanges:
+		data.append(packCard32(fdRange[0]))
+		data.append(packCard16(fdRange[1]))
+	data.append(packCard32(sentinelGID))
+	return bytesjoin(data)
+
+
 class FDSelectCompiler(object):
 
 	def __init__(self, fdSelect, parent):
@@ -1736,6 +1796,8 @@ class FDSelectCompiler(object):
 			self.data = packFDSelect0(fdSelectArray)
 		elif fmt == 3:
 			self.data = packFDSelect3(fdSelectArray)
+		elif fmt == 4:
+			self.data = packFDSelect4(fdSelectArray)
 		else:
 			# choose smaller of the two formats
 			data0 = packFDSelect0(fdSelectArray)
@@ -2247,6 +2309,12 @@ class BaseDict(object):
 		return self.compilerClass(self, strings, parent, isCFF2=isCFF2)
 
 	def __getattr__(self, name):
+		if name[:2] == name[-2:] == "__":
+			# to make deepcopy() and pickle.load() work, we need to signal with
+			# AttributeError that dunder methods like '__deepcopy__' or '__getstate__'
+			# aren't implemented. For more details, see:
+			# https://github.com/fonttools/fonttools/pull/1488
+			raise AttributeError(name)
 		value = self.rawDict.get(name, None)
 		if value is None:
 			value = self.defaults.get(name)
@@ -2336,7 +2404,7 @@ class TopDict(BaseDict):
 
 	def decompileAllCharStrings(self):
 		# Make sure that all the Private Dicts have been instantiated.
-		for charString in self.CharStrings.values():
+		for i, charString in enumerate(self.CharStrings.values()):
 			try:
 				charString.decompile()
 			except:
@@ -2424,9 +2492,16 @@ class PrivateDict(BaseDict):
 		if isCFF2:
 			self.defaults = buildDefaults(privateDictOperators2)
 			self.order = buildOrder(privateDictOperators2)
+			# Provide dummy values. This avoids needing to provide
+			# an isCFF2 state in a lot of places.
+			self.nominalWidthX = self.defaultWidthX = None
 		else:
 			self.defaults = buildDefaults(privateDictOperators)
 			self.order = buildOrder(privateDictOperators)
+
+	@property
+	def in_cff2(self):
+		return self._isCFF2
 
 	def getNumRegions(self, vi=None):  # called from misc/psCharStrings.py
 		# if getNumRegions is being called, we can assume that VarStore exists.
